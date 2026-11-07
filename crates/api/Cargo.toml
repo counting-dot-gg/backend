@@ -19,7 +19,7 @@ stats = { path = "../stats" }
 progression = { package = "cgg-progression", path = "../progression" }
 aes-gcm = "0.10"
 anyhow.workspace = true
-scrypt = { version = "0.11", default-features = false }
+scrypt = { version = "0.12", default-features = false }
 axum = { workspace = true, features = ["multipart"] }
 base64.workspace = true
 brotli = "6"
