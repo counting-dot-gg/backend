@@ -1,0 +1,42 @@
+services:
+  mysql:
+    image: mysql:8.0
+    environment:
+      MYSQL_ROOT_PASSWORD: dev
+    ports:
+      - "3306:3306"
+    volumes:
+      - mysql:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-pdev"]
+      interval: 5s
+      retries: 30
+
+  redis:
+    image: redis:7
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      retries: 30
+
+  backend:
+    build: .
+    init: true
+    environment:
+      MYSQL_DB_HOST: mysql
+      MYSQL_DB_PORT: "3306"
+      MYSQL_DB_USERNAME: root
+      MYSQL_DB_PASSWORD: dev
+      HARNESS_REDIS_URL: redis://redis:6379/1
+    ports:
+      - "8805:8805"
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+volumes:
+  mysql:

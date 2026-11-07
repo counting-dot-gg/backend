@@ -1,0 +1,43 @@
+[graph]
+all-features = false
+
+[advisories]
+version = 2
+yanked = "deny"
+unmaintained = "workspace"
+ignore = [
+    { id = "RUSTSEC-2023-0071", reason = "rsa via sqlx-mysql; no fixed release exists" },
+    { id = "RUSTSEC-2026-0346", reason = "rustls 0.22 via serenity, already on the latest release" },
+    { id = "RUSTSEC-2026-0349", reason = "rustls 0.22 via serenity, already on the latest release" },
+    { id = "RUSTSEC-2026-0382", reason = "rustls-webpki 0.102 via serenity, already on the latest release" },
+    { id = "RUSTSEC-2026-0049", reason = "rustls-webpki 0.102 via serenity, already on the latest release" },
+    { id = "RUSTSEC-2026-0098", reason = "rustls-webpki 0.102 via serenity, already on the latest release" },
+    { id = "RUSTSEC-2026-0099", reason = "rustls-webpki 0.102 via serenity, already on the latest release" },
+    { id = "RUSTSEC-2026-0104", reason = "rustls-webpki 0.102 via serenity, already on the latest release" },
+]
+
+[licenses]
+version = 2
+confidence-threshold = 0.9
+allow = [
+    "Apache-2.0",
+    "BSD-3-Clause",
+    "CDLA-Permissive-2.0",
+    "ISC",
+    "MIT",
+    "MPL-2.0",
+    "Unicode-3.0",
+    "Zlib",
+]
+
+[licenses.private]
+ignore = true
+
+[bans]
+multiple-versions = "allow"
+wildcards = "deny"
+allow-wildcard-paths = true
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"

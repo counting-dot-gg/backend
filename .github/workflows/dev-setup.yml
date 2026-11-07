@@ -1,0 +1,31 @@
+name: dev-setup
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    paths:
+      - Dockerfile
+      - .dockerignore
+      - compose.yml
+      - crates/harness/**
+      - .github/workflows/dev-setup.yml
+
+jobs:
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Start
+        run: docker compose up -d --build --wait mysql redis && docker compose up -d --build backend
+      - name: Count
+        run: |
+          for i in $(seq 1 60); do
+            docker compose exec -T backend target/release/cgg-harness say main 1 && exit 0
+            sleep 2
+          done
+          docker compose logs backend
+          exit 1
+      - name: Logs
+        if: failure()
+        run: docker compose logs

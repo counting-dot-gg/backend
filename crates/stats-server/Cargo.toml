@@ -1,0 +1,34 @@
+[package]
+name = "stats-server"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "stats"
+path = "src/main.rs"
+
+[dependencies]
+stats = { path = "../stats" }
+progression = { package = "cgg-progression", path = "../progression" }
+cgg-core = { path = "../core" }
+tokio = { workspace = true, features = ["full"] }
+axum.workspace = true
+sqlx = { workspace = true, features = ["chrono"] }
+redis = { workspace = true, features = ["connection-manager"] }
+serde.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+chrono = { workspace = true, features = ["serde"] }
+anyhow.workspace = true
+futures-util.workspace = true
+tokio-util.workspace = true
+ahash.workspace = true
+tower = "0.5"
+tower-http = { workspace = true, features = ["trace"] }
+
+[lints]
+workspace = true

@@ -1,0 +1,50 @@
+[package]
+name = "cgg-api"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "counting.gg HTTP API"
+
+[[bin]]
+name = "cgg-api"
+path = "src/main.rs"
+
+[dependencies]
+cgg-core = { path = "../core" }
+cgg-web = { path = "../web" }
+counting = { path = "../counting" }
+stats = { path = "../stats" }
+progression = { package = "cgg-progression", path = "../progression" }
+aes-gcm = "0.10"
+anyhow.workspace = true
+scrypt = { version = "0.11", default-features = false }
+axum = { workspace = true, features = ["multipart"] }
+base64.workspace = true
+brotli = "6"
+chrono.workspace = true
+chrono-tz.workspace = true
+dashmap = "5"
+flate2 = "1"
+fastrand.workspace = true
+getrandom.workspace = true
+futures-util.workspace = true
+hmac.workspace = true
+redis = { workspace = true, features = ["connection-manager"] }
+regex = "1"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+rust_decimal = "1"
+serde.workspace = true
+serde_json = { workspace = true, features = ["preserve_order"] }
+sha2.workspace = true
+socket2 = "0.5"
+sqlx = { workspace = true, features = ["chrono", "json", "rust_decimal"] }
+tokio = { workspace = true, features = ["full"] }
+tower = "0.5"
+tower-http = { workspace = true, features = ["fs", "normalize-path", "set-header"] }
+tracing.workspace = true
+urlencoding = "2"
+
+[lints]
+workspace = true

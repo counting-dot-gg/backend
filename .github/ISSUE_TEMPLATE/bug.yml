@@ -1,0 +1,34 @@
+name: Bug
+description: Something on the backend behaves wrongly
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. cgg-harness dev
+        2. cgg-harness say main 1
+        3. ...
+  - type: input
+    id: version
+    attributes:
+      label: Commit
+      placeholder: git rev-parse --short HEAD
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating system
+      options: [Windows, macOS, Linux, Docker]

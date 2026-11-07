@@ -1,0 +1,135 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  fmt:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup toolchain install
+      - run: cargo fmt --all --check
+
+  clippy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup toolchain install
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo clippy --locked --workspace --all-targets -- -D warnings
+
+  deny:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: EmbarkStudios/cargo-deny-action@v2
+
+  unit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup toolchain install
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test --release --locked --workspace
+
+  harness:
+    runs-on: ubuntu-latest
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ROOT_PASSWORD: harness
+        ports: ["3306:3306"]
+        options: >-
+          --health-cmd "mysqladmin ping -h 127.0.0.1 -pharness"
+          --health-interval 5s --health-timeout 5s --health-retries 30
+      redis:
+        image: redis:7
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s --health-timeout 5s --health-retries 30
+    env:
+      MYSQL_DB_HOST: 127.0.0.1
+      MYSQL_DB_PORT: "3306"
+      MYSQL_DB_USERNAME: root
+      MYSQL_DB_PASSWORD: harness
+      HARNESS_REDIS_URL: redis://127.0.0.1:6379/9
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - run: rustup toolchain install
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Build
+        run: cargo build --release --locked -p cgg-socket -p cgg-api -p cgg-bot -p cgg-harness
+
+      - name: Correctness suite
+        run: target/release/cgg-harness test --socket-bin target/release/cgg-socket
+
+      - name: Build base
+        if: github.event_name == 'pull_request'
+        run: |
+          git worktree add ../base "origin/${{ github.base_ref }}"
+          for p in socket api bot; do
+            if CARGO_TARGET_DIR="$PWD/target/base" cargo build --release --locked -p "cgg-$p" --manifest-path ../base/Cargo.toml; then
+              echo "built base cgg-$p"
+            else
+              echo "base has no cgg-$p; it will be benchmarked alone"
+            fi
+          done
+
+      - name: Benchmark base against head
+        if: github.event_name == 'pull_request'
+        run: |
+          set -o pipefail
+          status=0
+          for kind in socket api bot; do
+            base="target/base/release/cgg-$kind"
+            if [ -x "$base" ]; then
+              target/release/cgg-harness ab --kind "$kind" --base-bin "$base" --head-bin "target/release/cgg-$kind" --rounds 5 --seconds 8 || status=1
+            else
+              target/release/cgg-harness bench --kind "$kind" --bin "target/release/cgg-$kind" --rounds 3 --seconds 8 || status=1
+            fi
+          done
+          exit $status
+
+      - name: Benchmark main
+        if: github.event_name == 'push' && github.repository == 'counting-dot-gg/backend'
+        run: |
+          for kind in socket api bot; do
+            target/release/cgg-harness bench --kind "$kind" --bin "target/release/cgg-$kind" --rounds 3 --seconds 8
+          done
+
+      - name: Summary
+        if: always()
+        run: |
+          for kind in socket api bot; do
+            if [ -f "target/harness/comparison-$kind.md" ]; then
+              { echo "## $kind benchmark: base vs head"; echo; cat "target/harness/comparison-$kind.md"; echo; } >> "$GITHUB_STEP_SUMMARY"
+            elif [ -f "target/harness/bench-$kind-head.json" ]; then
+              { echo "## $kind benchmark"; echo; echo '```json'; cat "target/harness/bench-$kind-head.json"; echo '```'; echo; } >> "$GITHUB_STEP_SUMMARY"
+            fi
+          done
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: harness
+          path: |
+            target/harness/*.json
+            target/harness/*.md
+            target/harness/**/socket.log
+            target/harness/**/api.log
+            target/harness/**/bot.log

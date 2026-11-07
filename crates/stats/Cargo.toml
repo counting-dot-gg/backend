@@ -1,0 +1,28 @@
+[package]
+name = "stats"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+cgg-core = { path = "../core" }
+tokio = { workspace = true, features = ["full"] }
+sqlx = { workspace = true, features = ["chrono"] }
+redis = { workspace = true, features = ["connection-manager"] }
+serde.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+chrono = { workspace = true, features = ["serde"] }
+chrono-tz.workspace = true
+futures-util.workspace = true
+tokio-stream.workspace = true
+anyhow.workspace = true
+tokio-util.workspace = true
+rayon = "1"
+ahash.workspace = true
+brotli = "6"
+
+[lints]
+workspace = true

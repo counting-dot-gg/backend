@@ -1,0 +1,29 @@
+[package]
+name = "cgg-bot"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "counting.gg Discord bot"
+
+[[bin]]
+name = "cgg-bot"
+path = "src/main.rs"
+
+[dependencies]
+cgg-core = { path = "../core" }
+cgg-web = { path = "../web" }
+anyhow.workspace = true
+base64.workspace = true
+chrono.workspace = true
+dashmap = "5"
+redis = { workspace = true, features = ["connection-manager"] }
+serde_json.workspace = true
+serenity = { version = "0.12", default-features = false, features = ["builder", "cache", "client", "gateway", "http", "model", "rustls_backend"] }
+sqlx.workspace = true
+tokio = { workspace = true, features = ["full"] }
+tracing.workspace = true
+
+[lints]
+workspace = true

@@ -1,0 +1,15 @@
+.env
+target/
+*.md
+*.bin
+/bin/
+!AGENTS.md
+!CLAUDE.md
+!README.md
+!CONTRIBUTING.md
+!SECURITY.md
+!CODE_OF_CONDUCT.md
+!.github/pull_request_template.md
+.claude/settings.local.json
+*.wal
+*.wal.done

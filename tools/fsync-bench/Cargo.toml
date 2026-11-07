@@ -1,0 +1,9 @@
+[package]
+name = "fsync-bench"
+version = "0.1.0"
+edition = "2021"
+[dependencies]
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[workspace]

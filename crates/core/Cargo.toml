@@ -1,0 +1,17 @@
+[package]
+name = "cgg-core"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "Startup plumbing shared by the counting.gg binaries: env, MySQL, logging."
+
+[dependencies]
+anyhow.workspace = true
+dotenvy.workspace = true
+sqlx.workspace = true
+tracing-subscriber.workspace = true
+
+[lints]
+workspace = true
