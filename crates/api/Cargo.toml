@@ -17,7 +17,7 @@ cgg-web = { path = "../web" }
 counting = { path = "../counting" }
 stats = { path = "../stats" }
 progression = { package = "cgg-progression", path = "../progression" }
-aes-gcm = "0.10"
+aes-gcm = "0.11"
 anyhow.workspace = true
 scrypt = { version = "0.11", default-features = false }
 axum = { workspace = true, features = ["multipart"] }
