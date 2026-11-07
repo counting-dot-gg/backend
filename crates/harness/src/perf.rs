@@ -43,6 +43,7 @@ const ENDPOINTS: [(&str, bool); 12] = [
 
 fn base_command(bin: &Path, target: &Target, workdir: &Path, log_name: &str) -> Result<Command> {
     std::fs::create_dir_all(workdir)?;
+    let bin = std::fs::canonicalize(bin).with_context(|| format!("binary {}", bin.display()))?;
     let log = std::fs::File::create(workdir.join(log_name))?;
     let m = &target.mysql;
     let mut cmd = Command::new(bin);
@@ -178,7 +179,7 @@ pub async fn api_round(bin: &Path, target: &Target, workdir: &Path, load: Load) 
         .env("PORT", port.to_string())
         .env("BOT_PORT", free_port()?.to_string())
         .env("STATS_HTTP_URL", "http://127.0.0.1:9")
-        .env("UPLOADS_DIR", workdir.join("uploads"))
+        .env("UPLOADS_DIR", std::fs::canonicalize(workdir)?.join("uploads"))
         .env("TRUST_PROXY_HOPS", "1")
         .spawn()
         .context("start api")?;
