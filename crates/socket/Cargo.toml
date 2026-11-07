@@ -18,7 +18,7 @@ counting = { path = "../counting" }
 stats = { path = "../stats" }
 progression = { package = "cgg-progression", path = "../progression" }
 tokio = { workspace = true, features = ["full"] }
-socket2 = "0.5"
+socket2 = "0.6"
 libc = "0.2"
 axum.workspace = true
 socketioxide = { version = "0.18", features = ["extensions"] }
