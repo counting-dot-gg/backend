@@ -54,6 +54,8 @@ change. Prefer to do it yourself? Follow the steps for your system below.
 
 ## Windows
 
+https://github.com/user-attachments/assets/81a10bbe-2065-451f-8716-cfa1b8fc6aab
+
 ### 1. Open a terminal
 
 Press the **Windows key**, type `PowerShell`, and click **Windows
@@ -120,6 +122,12 @@ and go to [Using it](#using-it). On Windows, start commands with
 
 ## Linux (Ubuntu / Debian)
 
+
+
+https://github.com/user-attachments/assets/b3be27bf-227e-4f73-b28d-5d14e8cf341f
+
+
+
 ### 1. Open a terminal
 
 Press **Ctrl + Alt + T**, or open **Terminal** from your apps.
@@ -169,6 +177,12 @@ When you see `counting.gg backend running`, it's up. Leave this terminal
 open and go to [Using it](#using-it).
 
 ## Mac
+
+
+
+https://github.com/user-attachments/assets/bb033117-6f1c-4603-8beb-87b4b095baf5
+
+
 
 ### 1. Open a terminal
 
