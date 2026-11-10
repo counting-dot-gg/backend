@@ -206,7 +206,7 @@ async fn check_avatars(app: &App) -> Result<()> {
         .map(|m| (m.user.id.to_string(), m.user.avatar.map(|a| a.to_string())))
         .collect();
     let rows = sqlx::query(
-        "SELECT uuid, name, discordId, avatar, roles FROM counters WHERE roles LIKE '%counter%' ORDER BY id ASC",
+        "SELECT uuid, name, discordId, avatar, CAST(roles AS CHAR) AS roles FROM counters WHERE roles LIKE '%counter%' ORDER BY id ASC",
     )
     .fetch_all(&app.pool)
     .await?;

@@ -191,7 +191,7 @@ pub async fn lock(app: &App, locker: &Value, thread: &Value, silent: bool) -> Re
 }
 
 pub async fn new_user(app: &App, uuid: &str) -> Result<()> {
-    let Some(row) = sqlx::query("SELECT name, username, roles FROM counters WHERE uuid = ? LIMIT 1")
+    let Some(row) = sqlx::query("SELECT name, username, CAST(roles AS CHAR) AS roles FROM counters WHERE uuid = ? LIMIT 1")
         .bind(uuid)
         .fetch_optional(&app.pool)
         .await?

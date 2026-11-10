@@ -37,7 +37,7 @@ fn parse_roles(raw: &str) -> Vec<String> {
 }
 
 async fn counter_by_discord(app: &App, discord_id: &str) -> Option<SiteCounter> {
-    let row = sqlx::query("SELECT uuid, roles FROM counters WHERE discordId = ? LIMIT 1")
+    let row = sqlx::query("SELECT uuid, CAST(roles AS CHAR) AS roles FROM counters WHERE discordId = ? LIMIT 1")
         .bind(discord_id)
         .fetch_optional(&app.pool)
         .await
