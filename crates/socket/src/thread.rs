@@ -2,17 +2,18 @@ use crate::ids;
 use crate::metrics::Metrics;
 use crate::model::{BroadcastPost, Counter, CounterRef, Post, PostExtras, ThreadMeta};
 use crate::wal::{Append, Origin, Wal, WalRecord};
-use counting::js::{self, len16, parse_float};
-use counting::{Env, Input, ThreadRules, ValidationType, parse_input, validate};
+use cgg_decide::{Book, Decision, Dice, Job, apply, judge};
+use counting::js;
 use parking_lot::RwLock;
 use serde_json::{Value, json};
 use socketioxide::SocketIo;
-use std::collections::{HashMap, VecDeque};
-use std::hash::{Hash, Hasher};
+use std::collections::VecDeque;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
+
+pub use cgg_decide::author_key;
 
 pub struct Ctx {
     pub io: SocketIo,
@@ -31,6 +32,14 @@ pub struct PostJob {
     pub post_hash: Option<Value>,
     pub macro_preset_id: Option<i64>,
     pub macro_preset_version_id: Option<i64>,
+    pub received: Instant,
+    pub origin: Origin,
+}
+
+pub struct Decided {
+    pub decision: Decision,
+    pub counter: CounterRef,
+    pub post_hash: Option<Value>,
     pub received: Instant,
     pub origin: Origin,
 }
@@ -63,9 +72,12 @@ impl<T> Pipe for T {}
 
 pub enum Msg {
     Post(Box<PostJob>),
+    Decided(Box<Decided>),
+    Snapshot(tokio::sync::oneshot::Sender<(ThreadMeta, Book)>),
     Update(Box<ThreadMeta>),
     Sync(Box<ThreadMeta>),
     SetThreadOfTheDay(bool),
+    Barrier(tokio::sync::oneshot::Sender<()>),
 }
 
 pub const RING: usize = 256;
@@ -90,26 +102,15 @@ impl ThreadHandle {
     }
 }
 
-pub fn author_key(uuid: &str) -> u64 {
-    let mut h = std::collections::hash_map::DefaultHasher::new();
-    uuid.hash(&mut h);
-    h.finish()
-}
-
 pub struct State {
-    pub last_valid: Option<Arc<Post>>,
+    pub book: Book,
     pub last_valid_counter: Option<CounterRef>,
-    pub recent_valid: VecDeque<Arc<Post>>,
-    pub last_post: Option<Arc<Post>>,
-    pub streak: u64,
-    pub slow_last: HashMap<u64, f64>,
 }
 
 struct Actor {
     h: Arc<ThreadHandle>,
     ctx: Arc<Ctx>,
     meta: ThreadMeta,
-    vt: ValidationType,
     room: String,
     st: State,
     local_change: Option<Instant>,
@@ -117,11 +118,11 @@ struct Actor {
 
 pub fn spawn(meta: ThreadMeta, st: State, ctx: Arc<Ctx>) -> Arc<ThreadHandle> {
     let (tx, rx) = mpsc::channel(4096);
-    let last_count = match (&st.last_valid, &st.last_valid_counter) {
+    let last_count = match (&st.book.last_valid, &st.last_valid_counter) {
         (Some(p), Some(c)) => Some((p.clone(), c.clone())),
         _ => None,
     };
-    let ring: VecDeque<Arc<Post>> = st.last_post.iter().cloned().collect();
+    let ring: VecDeque<Arc<Post>> = st.book.last_post.iter().cloned().collect();
     let h = Arc::new(ThreadHandle {
         meta: RwLock::new(meta.clone()),
         tx,
@@ -131,7 +132,6 @@ pub fn spawn(meta: ThreadMeta, st: State, ctx: Arc<Ctx>) -> Arc<ThreadHandle> {
     let a = Actor {
         h: h.clone(),
         ctx,
-        vt: ValidationType::from_name(&meta.validation_type),
         room: format!("thread_{}", meta.uuid),
         meta,
         st,
@@ -141,7 +141,7 @@ pub fn spawn(meta: ThreadMeta, st: State, ctx: Arc<Ctx>) -> Arc<ThreadHandle> {
     h
 }
 
-fn ms(d: std::time::Duration) -> f64 {
+fn ms(d: Duration) -> f64 {
     round2(d.as_secs_f64() * 1000.0)
 }
 
@@ -162,7 +162,7 @@ impl Actor {
         let uuid = c.uuid.clone();
         tokio::spawn(async move {
             let Some(app) = app else { return };
-            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            tokio::time::sleep(Duration::from_millis(50)).await;
             let text = format!(
                 "BANG!!!!! {name} was just fucking KILLED!!! JESUS CHRIST!!!
 
@@ -187,8 +187,13 @@ impl Actor {
             }
         }
         self.meta = meta;
-        self.vt = ValidationType::from_name(&self.meta.validation_type);
         *self.h.meta.write() = self.meta.clone();
+        if let Some(app) = self.ctx.app.get().and_then(|a| a.upgrade())
+            && app.regional.is_remote(&self.meta.name)
+        {
+            let name = self.meta.name.clone();
+            tokio::spawn(async move { crate::regional::meta_changed(&app, &name).await });
+        }
     }
 
     async fn run(mut self, mut rx: mpsc::Receiver<Msg>) {
@@ -210,12 +215,17 @@ impl Actor {
                         );
                     }
                 }
+                Msg::Decided(d) => self.decided(*d),
+                Msg::Snapshot(reply) => {
+                    let _ = reply.send((self.meta.clone(), self.st.book.clone()));
+                }
                 Msg::Update(meta) => self.adopt(*meta, false),
                 Msg::Sync(meta) => {
-                    let recent = self
-                        .local_change
-                        .is_some_and(|t| t.elapsed() < std::time::Duration::from_secs(10));
+                    let recent = self.local_change.is_some_and(|t| t.elapsed() < Duration::from_secs(10));
                     self.adopt(*meta, recent);
+                }
+                Msg::Barrier(done) => {
+                    let _ = done.send(());
                 }
                 Msg::SetThreadOfTheDay(on) => {
                     self.local_change = Some(Instant::now());
@@ -235,190 +245,117 @@ impl Actor {
         }
     }
 
-    fn reject(&self) {
+    fn post_ns(&self) -> u64 {
+        let last = self.st.book.last_post.as_ref().map(|p| p.timestamp.as_str());
+        cgg_decide::ids::ns_after(last, self.ctx.clock.now_ns())
+    }
+
+    fn reject(&self, job: &PostJob, reason: &'static str) {
         self.ctx.metrics.rejected.fetch_add(1, Ordering::Relaxed);
+        let Some(hash) = job.post_hash.clone() else { return };
+        let Some(app) = self.ctx.app.get().and_then(|a| a.upgrade()) else {
+            return;
+        };
+        let author = job.counter.uuid.clone();
+        let thread = self.meta.name.clone();
+        tokio::spawn(async move {
+            app.to_counter(
+                &author,
+                "post_rejected",
+                &json!({ "thread_name": thread, "post_hash": hash, "reason": reason }),
+            )
+            .await;
+        });
     }
 
     fn post(&mut self, job: PostJob) {
         let picked = Instant::now();
         let queue_wait = picked - job.received;
         self.ctx.metrics.queue.record(queue_wait);
-        let c: &Counter = &job.counter;
-
-        let trimmed_len = len16(js::trim(&job.text));
-        let system = job.origin == Origin::System;
-        if !system
-            && (self.meta.locked
-                || self.meta.post_bans.contains(&c.uuid)
-                || !(1..=4096).contains(&trimmed_len)
-                || !self.meta.may_post(c))
-        {
-            return self.reject();
-        }
-
-        let is_bot = c.has_role("bot");
-        let mut input = js::trim(&job.text).to_owned();
-        let parsed = parse_input(&input, self.vt, is_bot, self.meta.auto_validated);
-        let ns = self.ctx.clock.now_ns();
-        let uuid = ids::uuid_for(ns);
-        let timestamp = ids::timestamp_for(ns);
-        let ts = parse_float(&timestamp);
-        let tslc = self
-            .st
-            .last_valid
-            .as_ref()
-            .map_or(0.0, |p| ts - parse_float(&p.timestamp));
-        let tslp = self
-            .st
-            .last_post
-            .as_ref()
-            .map_or(0.0, |p| ts - parse_float(&p.timestamp));
-
-        let mut comment = parsed.comment.clone();
-        let mut has_comment = comment.as_deref().is_some_and(|s| !js::trim(s).is_empty());
-        let mut comment_deleted = false;
-        if c.has_role("muted") && has_comment {
-            comment = None;
-            comment_deleted = true;
-            has_comment = false;
-            input = parsed.count_content.clone().unwrap_or_default();
-        }
-
-        let me = author_key(&c.uuid);
-        let last_prev = self
-            .st
-            .last_valid
-            .as_ref()
-            .map(|p| p.as_prev(author_key(&p.author_uuid)));
-        let recent: Vec<counting::PrevCount> = self
-            .st
-            .recent_valid
-            .iter()
-            .take(2)
-            .map(|p| p.as_prev(author_key(&p.author_uuid)))
-            .collect();
-        let within_hour = self.vt == ValidationType::Slow
-            && self
-                .st
-                .slow_last
-                .get(&me)
-                .is_some_and(|&t| t > validate::timestamp_minus_ms(ts, 3_600_000.0) && t < ts);
-        let rules = ThreadRules {
-            vt: self.vt,
-            first_valid_count: &self.meta.first_valid_count,
-            allow_double_posts: self.meta.allow_double_posts,
-            reset_on_mistakes: self.meta.reset_on_mistakes,
-        };
-        let vin = Input {
-            author: me,
-            is_bot,
-            username_len16: len16(&c.username),
-            count_banned: self.meta.count_bans.contains(&c.uuid),
-            raw_count: parsed.raw_count.as_deref(),
-            last_valid: last_prev.as_ref(),
-            recent_valid: [recent.first(), recent.get(1)],
-            post_timestamp: ts,
-            time_since_last_count: tslc,
-            author_counted_within_hour: within_hour,
-            newest_valid_count_number: self.st.recent_valid.front().map(|p| p.valid_count_number),
-        };
         let mut rng = fastrand::f64;
-        let mut env = Env {
+        let mut dice = Dice {
             now_ms: self.ctx.clock.now_ms(),
             server_tz: self.ctx.server_tz,
-            random: &mut rng,
             secret: Some(&self.ctx.game_secret),
+            random: &mut rng,
         };
-        let v = validate(&rules, &vin, &mut env);
-        let is_valid = v.is_valid;
-        let stricken = !is_valid && parsed.is_count && self.meta.auto_validated;
+        let judged = judge(
+            &self.meta,
+            &self.st.book,
+            &Job {
+                counter: &job.counter,
+                text: &job.text,
+                system: job.origin == Origin::System,
+                ns: self.post_ns(),
+                macro_preset_id: job.macro_preset_id,
+                macro_preset_version_id: job.macro_preset_version_id,
+            },
+            &mut dice,
+        );
+        match judged {
+            Err(reason) => self.reject(&job, reason),
+            Ok(d) => self.commit(
+                d,
+                Committing {
+                    counter: job.counter,
+                    post_hash: job.post_hash,
+                    origin: job.origin,
+                    received: job.received,
+                    picked,
+                    queue_wait,
+                },
+            ),
+        }
+    }
 
-        let three = comment.as_deref().is_some_and(|s| len16(js::trim(s)) >= 3);
-        let post = Arc::new(Post {
-            uuid,
-            timestamp,
-            time_since_last_count: js::num_to_string(tslc),
-            time_since_last_post: js::num_to_string(tslp),
-            raw_text: js::trim(&input).to_owned(),
-            is_count: parsed.is_count,
-            is_valid_count: is_valid,
-            valid_count_number: v.valid_count_number,
-            count_content: parsed.count_content.clone(),
-            raw_count: parsed.raw_count.clone(),
-            stricken,
-            thread: self.meta.uuid.clone(),
-            thread_id: self.meta.id,
-            has_comment,
-            has_three_char_comment: three,
-            comment,
-            author_uuid: c.uuid.clone(),
-            author_id: c.id,
-            is_deleted: false,
-            is_comment_deleted: comment_deleted,
-            reactions: json!({}),
-            macro_preset_id: job.macro_preset_id,
-            macro_preset_version_id: job.macro_preset_version_id,
-            id: self.ctx.next_id.fetch_add(1, Ordering::Relaxed),
-        });
+    fn decided(&mut self, d: Decided) {
+        let picked = Instant::now();
+        let queue_wait = picked - d.received;
+        self.ctx.metrics.queue.record(queue_wait);
+        self.commit(
+            d.decision,
+            Committing {
+                counter: d.counter,
+                post_hash: d.post_hash,
+                origin: d.origin,
+                received: d.received,
+                picked,
+                queue_wait,
+            },
+        );
+    }
+
+    fn commit(&mut self, mut d: Decision, how: Committing) {
+        let Committing {
+            counter,
+            post_hash,
+            origin,
+            received,
+            picked,
+            queue_wait,
+        } = how;
+        d.post.id = self.ctx.next_id.fetch_add(1, Ordering::Relaxed);
+        let post = Arc::new(d.post);
+        let bans_changed = apply(&mut self.meta, &mut self.st.book, &post, &d.bans);
+        if d.bang
+            && let (Some(roll), Some(chance)) = (d.roll, d.chance)
+        {
+            self.bang(&counter, roll, chance);
+        }
         let mut extras = PostExtras {
-            post_hash: job.post_hash,
+            post_hash,
             scheduling_ms: ms(queue_wait),
+            roll: d.roll,
+            chance: d.chance,
             ..Default::default()
         };
-        if let Some((roll, chance)) = v.roll.filter(|_| post.is_count) {
-            extras.roll = Some(roll);
-            extras.chance = Some(chance);
+        if post.is_valid_count {
+            self.st.last_valid_counter = Some(counter.clone());
+            *self.h.last_count.write() = Some((post.clone(), counter.clone()));
         }
-
-        let mut bans_changed = false;
-        match self.meta.name.as_str() {
-            "tug_of_war_avoid_0" if is_valid && post.raw_count.as_deref() == Some("0") => {
-                self.meta.count_bans.push(c.uuid.clone());
-                bans_changed = true;
-            }
-            "russian_roulette" if is_valid => {
-                let (chance, roll) = (1.0 / 10000.0, fastrand::f64());
-                extras.chance = Some(chance);
-                extras.roll = Some(roll);
-                if roll < chance {
-                    self.meta.post_bans.push(c.uuid.clone());
-                    bans_changed = true;
-                    self.bang(c, roll, chance);
-                }
-            }
-            "yoco" if is_valid => {
-                self.meta.post_bans.push(c.uuid.clone());
-                bans_changed = true;
-            }
-            _ => {}
-        }
-
-        if stricken {
-            self.st.streak = 0;
-        }
-        if is_valid {
-            self.st.last_valid = Some(post.clone());
-            self.st.last_valid_counter = Some(job.counter.clone());
-            self.st.recent_valid.push_front(post.clone());
-            self.st.recent_valid.truncate(3);
-            self.st.streak += 1;
-            if self.vt == ValidationType::Slow {
-                self.st.slow_last.insert(me, ts);
-            }
-            *self.h.last_count.write() = Some((post.clone(), job.counter.clone()));
-        }
-        if stricken && self.meta.reset_on_mistakes {
-            self.st.last_valid = None;
+        if post.stricken && self.meta.reset_on_mistakes {
             *self.h.last_count.write() = None;
-            if matches!(
-                self.meta.name.as_str(),
-                "no_mistakes_or_ban" | "no_mistakes_or_ban_double"
-            ) {
-                self.meta.post_bans.push(post.author_uuid.clone());
-                bans_changed = true;
-            }
         }
-        self.st.last_post = Some(post.clone());
         if bans_changed {
             self.local_change = Some(Instant::now());
             *self.h.meta.write() = self.meta.clone();
@@ -430,16 +367,14 @@ impl Actor {
             post: (*post).clone(),
             roll: extras.roll,
             chance: extras.chance,
-            origin: job.origin.clone(),
+            origin,
         })
         .expect("serialise post");
         let handle = self.h.clone();
         let io = self.ctx.io.clone();
         let room = self.room.clone();
-        let streak = self.st.streak;
-        let counter = job.counter.clone();
+        let streak = self.st.book.streak;
         let metrics = self.ctx.metrics.clone();
-        let received = job.received;
         let picked_at = picked;
         let thread_name = self.meta.name.clone();
         let thread_uuid = self.meta.uuid.clone();
@@ -474,7 +409,7 @@ impl Actor {
             metrics.broadcast.record(sent - b0);
             crate::monitor::slow_post((sent - received).as_millis() as u64, &thread_name);
             if sent - received >= *SLOW_POST {
-                let ms = |d: std::time::Duration| d.as_secs_f64() * 1000.0;
+                let ms = |d: Duration| d.as_secs_f64() * 1000.0;
                 tracing::warn!(
                     "slow post in {thread_name}: {:.2} ms (queue {:.2}, process {:.2}, wal {:.2}, broadcast {:.2})",
                     ms(sent - received),
@@ -531,8 +466,8 @@ impl Actor {
     }
 }
 
-static SLOW_POST: std::sync::LazyLock<std::time::Duration> = std::sync::LazyLock::new(|| {
-    std::time::Duration::from_micros(
+static SLOW_POST: std::sync::LazyLock<Duration> = std::sync::LazyLock::new(|| {
+    Duration::from_micros(
         (std::env::var("SLOW_POST_MS")
             .ok()
             .and_then(|v| v.parse::<f64>().ok())
@@ -552,10 +487,21 @@ pub fn boot_state(meta: &ThreadMeta, b: crate::db::ThreadBoot, last_valid_counte
     }
     State {
         last_valid_counter: last_valid.as_ref().and(last_valid_counter),
-        last_valid,
-        recent_valid: recent,
-        last_post: b.last_post.map(Arc::new),
-        streak: b.streak,
-        slow_last: b.slow_recent.into_iter().map(|(a, t)| (author_key(&a), t)).collect(),
+        book: Book {
+            last_valid,
+            recent_valid: recent,
+            last_post: b.last_post.map(Arc::new),
+            streak: b.streak,
+            slow_last: b.slow_recent.into_iter().map(|(a, t)| (author_key(&a), t)).collect(),
+        },
     }
+}
+
+struct Committing {
+    counter: CounterRef,
+    post_hash: Option<Value>,
+    origin: Origin,
+    received: Instant,
+    picked: Instant,
+    queue_wait: Duration,
 }

@@ -3,6 +3,7 @@ static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 mod achievements;
 mod app;
+mod auto;
 mod bingo;
 mod bingo_window;
 mod commands;
@@ -27,6 +28,8 @@ mod monitor;
 mod persisted;
 mod persister;
 mod rank;
+mod regional;
+mod regional_log;
 mod shuffle;
 mod splits;
 mod sync;
@@ -37,7 +40,7 @@ mod writer_lock;
 use anyhow::Result;
 use app::App;
 use axum::Router;
-use axum::routing::get;
+use axum::routing::{get, post};
 use axum::serve::ListenerExt;
 use cgg_web::nest;
 use cursor::{Checkpoints, CursorFile, Position};
@@ -163,6 +166,7 @@ async fn main() -> Result<()> {
         clock: clock.clone(),
         system_counter: Arc::new(model::Counter::system()),
         wal: Default::default(),
+        regional: Default::default(),
     });
     let _ = app.wal.set(w.clone());
     let _ = ctx.app.set(Arc::downgrade(&app));
@@ -189,6 +193,9 @@ async fn main() -> Result<()> {
         app.threads_by_id.insert(id, h);
     }
 
+    regional::load(&app).await?;
+    regional::start_health(app.clone());
+    regional::start_auto(app.clone());
     let daily = daily::load(&app, effects_at.post_id).await?;
     *app.daily.lock() = daily;
     let xp: Option<i64> = sqlx::query_scalar("SELECT CAST(SUM(xp) AS SIGNED) FROM counters")
@@ -277,9 +284,27 @@ async fn main() -> Result<()> {
             async move { health(&app, &pstats, &checkpoints) }
         }
     };
+    let ingest_route = {
+        let app = app.clone();
+        move |headers: axum::http::HeaderMap, body: axum::body::Bytes| {
+            let app = app.clone();
+            async move { regional::ingest(&app, &headers, &body).await }
+        }
+    };
+    let pull_route = |what: &'static str| {
+        let app = app.clone();
+        move |headers: axum::http::HeaderMap, body: axum::body::Bytes| {
+            let app = app.clone();
+            async move { regional::pull(&app, &headers, &body, what).await }
+        }
+    };
     let router = Router::new()
         .route("/metrics", get(metrics_route))
         .route("/healthz", get(health_route))
+        .route("/do/ingest", post(ingest_route))
+        .route("/do/counter", post(pull_route("counter")))
+        .route("/do/snapshot", post(pull_route("snapshot")))
+        .route("/do/late", post(pull_route("late")))
         .layer(layer)
         .layer(
             CorsLayer::new()
@@ -304,7 +329,8 @@ async fn main() -> Result<()> {
         let (app, persisted) = (app.clone(), persisted.clone());
         tokio::spawn(async move {
             stop_signal().await;
-            tracing::info!("shutting down: flushing misc and totals");
+            tracing::info!("shutting down: finishing moves, then flushing misc and totals");
+            regional::finish_moves(&app).await;
             misc::flush(&app).await;
             save_totals(&app).await;
             let target = app.wal.get().map(|w| w.committed.get()).unwrap_or(0);

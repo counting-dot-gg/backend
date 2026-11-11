@@ -1,0 +1,23 @@
+{
+  "name": "cgg-do-poc",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22.12"
+  },
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "wasm": "node --experimental-strip-types --no-warnings tools/wasm.ts",
+    "typecheck": "tsc --noEmit",
+    "token": "node --experimental-strip-types --no-warnings tools/token.ts",
+    "probe": "node --experimental-strip-types --no-warnings tools/probe.ts",
+    "replay": "node --experimental-strip-types --no-warnings tools/replay.ts",
+    "admin": "node --experimental-strip-types --no-warnings tools/admin.ts"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "5.20261023.1",
+    "typescript": "5.9.3",
+    "wrangler": "4.152.0"
+  }
+}

@@ -149,8 +149,8 @@ async fn upload_day(state: &AppState, day: NaiveDate) -> anyhow::Result<()> {
     };
     let (start, end) = eastern_bounds(day);
     let rows = sqlx::query("SELECT * FROM post WHERE timestamp > ? AND timestamp < ? ORDER BY id ASC")
-        .bind(start as f64)
-        .bind(end as f64)
+        .bind(start.to_string())
+        .bind(end.to_string())
         .fetch_all(&state.pool)
         .await?;
     let posts: Vec<Value> = rows

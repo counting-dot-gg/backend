@@ -1,0 +1,20 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "cgg-do-poc",
+  "main": "src/index.ts",
+  "build": { "command": "node --experimental-strip-types --no-warnings tools/wasm.ts" },
+  "compatibility_date": "2026-10-20",
+  "durable_objects": {
+    "bindings": [
+      { "name": "PROBE", "class_name": "ProbeDO" },
+      { "name": "THREAD", "class_name": "ThreadDO" }
+    ]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ProbeDO", "ThreadDO"] }],
+  "vars": {
+    "ENABLED": "on",
+    "FLUSH_MS": "0",
+    "INGEST_URL": ""
+  },
+  "observability": { "enabled": true }
+}

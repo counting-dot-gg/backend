@@ -61,6 +61,18 @@ impl Decoder {
     }
 }
 
+fn peer_closed(sock: &TcpStream) -> bool {
+    let mut discard = [0u8; 512];
+    loop {
+        match sock.try_read(&mut discard) {
+            Ok(0) => return true,
+            Ok(_) => continue,
+            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => return false,
+            Err(_) => return true,
+        }
+    }
+}
+
 #[derive(Clone)]
 pub struct Client {
     tx: mpsc::Sender<Value>,
@@ -85,11 +97,25 @@ impl Client {
                 loop {
                     let msg = match pending.take() {
                         Some(m) => m,
-                        None => match rx.recv().await {
-                            Some(m) => m,
-                            None => return,
+                        None => tokio::select! {
+                            m = rx.recv() => match m {
+                                Some(m) => m,
+                                None => return,
+                            },
+                            _ = sock.readable() => {
+                                if peer_closed(&sock) {
+                                    tracing::warn!("nest {name}: {addr} closed the connection; reconnecting");
+                                    break;
+                                }
+                                continue;
+                            }
                         },
                     };
+                    if peer_closed(&sock) {
+                        tracing::warn!("nest {name}: {addr} closed the connection; reconnecting");
+                        pending = Some(msg);
+                        break;
+                    }
                     if let Err(e) = sock.write_all(&frame(&msg)).await {
                         tracing::warn!("nest {name}: write failed ({e}); reconnecting");
                         pending = Some(msg);
@@ -304,5 +330,38 @@ mod tests {
         assert_eq!(d.next_message().unwrap().unwrap(), m);
         assert_eq!(d.next_message().unwrap(), None);
         assert_eq!(command_of(&m["pattern"]), "x");
+    }
+
+    async fn read_message(conn: &mut TcpStream) -> Value {
+        let mut d = Decoder::default();
+        let mut buf = [0u8; 4096];
+        loop {
+            if let Some(m) = d.next_message().unwrap() {
+                return m;
+            }
+            let n = conn.read(&mut buf).await.unwrap();
+            assert!(n > 0, "connection closed before a message arrived");
+            d.push(&buf[..n]);
+        }
+    }
+
+    #[tokio::test]
+    async fn a_message_sent_after_the_server_restarts_is_not_lost() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap().to_string();
+        let client = Client::connect("test", addr);
+        let (first, _) = listener.accept().await.unwrap();
+        drop(first);
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        client.emit("dailyStatsReport", json!({ "n": 1 }));
+        let (mut second, _) = tokio::time::timeout(Duration::from_secs(5), listener.accept())
+            .await
+            .expect("client never reconnected")
+            .unwrap();
+        let m = tokio::time::timeout(Duration::from_secs(5), read_message(&mut second))
+            .await
+            .expect("message never arrived");
+        assert_eq!(m["data"]["n"], 1);
+        assert_eq!(command_of(&m["pattern"]), "dailyStatsReport");
     }
 }

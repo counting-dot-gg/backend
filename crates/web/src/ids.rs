@@ -40,23 +40,11 @@ impl Clock {
 }
 
 pub fn uuid_for(ns: u64) -> String {
-    let r = fastrand::f64();
-    let s = format!("{ns:019}{}", (r * 9e4) as u32 + 10000);
-    let v = ['8', '9', 'a'][(r * 3.0) as usize];
-    format!(
-        "{}-{}-4{}-{}{}-{}{}",
-        &s[0..8],
-        &s[8..12],
-        &s[12..15],
-        v,
-        &s[15..18],
-        &s[18..24],
-        &s[12..18]
-    )
+    cgg_decide::ids::uuid_for(ns, fastrand::f64())
 }
 
 pub fn timestamp_for(ns: u64) -> String {
-    counting::js::num_to_string((ns / 1000) as f64 / 1000.0)
+    cgg_decide::ids::timestamp_for(ns)
 }
 
 #[cfg(test)]

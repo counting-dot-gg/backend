@@ -111,6 +111,10 @@ pub enum Origin {
         message_id: Option<String>,
     },
     System,
+    Durable {
+        epoch: u64,
+        seq: u64,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

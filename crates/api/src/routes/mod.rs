@@ -7,6 +7,7 @@ pub mod features;
 pub mod feedback;
 pub mod metrics;
 pub mod rank;
+pub mod regional;
 pub mod server;
 pub mod sitegoals;
 pub mod thread;
@@ -40,6 +41,7 @@ pub fn throttle_rule(key: &str) -> Rule {
 fn api() -> Router<AppState> {
     Router::new()
         .merge(features::routes())
+        .merge(regional::routes())
         .merge(sitegoals::routes())
         .merge(server::routes())
         .merge(emote::routes())

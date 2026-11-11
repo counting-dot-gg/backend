@@ -21,6 +21,7 @@ pub struct Config {
     pub persist_batch: usize,
     pub server_tz: chrono_tz::Tz,
     pub site_version: String,
+    pub regional: crate::regional::RegionalConfig,
     pub cors_origins: Vec<String>,
     pub trust_proxy_hops: usize,
     pub max_connections_per_ip: usize,
@@ -112,6 +113,7 @@ impl Config {
                 .parse()
                 .map_err(|e| anyhow::anyhow!("SERVER_TZ: {e}"))?,
             site_version: var("SITE_VERSION").unwrap_or("v1.3.8".into()),
+            regional: crate::regional::RegionalConfig::from_env(),
             cors_origins,
             trust_proxy_hops: var("TRUST_PROXY_HOPS").unwrap_or("0".into()).parse()?,
             max_connections_per_ip: var("MAX_CONNECTIONS_PER_IP").unwrap_or("300".into()).parse()?,

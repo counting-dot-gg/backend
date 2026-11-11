@@ -248,6 +248,21 @@ pub async fn on_connect(s: SocketRef, app: Arc<App>) {
     }
 
     on!(s, app, "watch", [], |a, s, d| watch(&a, &s, &d).await);
+    on!(s, app, "thread_region", [Guard::Misc], |a, s, d| {
+        crate::regional::request_move(&a, &s, &d).await
+    });
+    on!(s, app, "post_status", [Guard::Misc], |a, s, d| {
+        crate::regional::post_status(&a, &s, &d).await
+    });
+    on!(s, app, "thread_region_cancel", [Guard::Misc], |a, s, d| {
+        crate::regional::cancel_pending(&a, &s, &d).await
+    });
+    on!(s, app, "thread_region_unreachable", [Guard::Misc], |a, s, d| {
+        crate::regional::report_unreachable(&a, &s, &d).await
+    });
+    on!(s, app, "regional_sample", [Guard::Misc], |a, s, d| {
+        crate::regional::client_sample(&a, &s, &d).await
+    });
     on!(s, app, "rank_live", [], |a, s, d| rank_live(&a, &s, &d).await);
     on!(s, app, "watchRock", [Guard::Misc], |a, s, d| misc::watch_rock(&a, &s)
         .await);
@@ -491,7 +506,36 @@ async fn post(app: &App, s: &SocketRef, data: Value) {
         received,
         origin: Origin::Socket,
     };
-    if h.tx.send(Msg::Post(Box::new(job))).await.is_err() {
+    let job = if app.cfg.regional.movable(name) {
+        match app.regional.admit(name, job) {
+            crate::regional::Admitted::Here(job) if app.regional.first_time(name, job.post_hash.as_ref()) => job,
+            crate::regional::Admitted::Here(_) => return,
+            crate::regional::Admitted::Waiting => {
+                s.emit(
+                    "post_queued",
+                    &json!({ "thread_name": name, "post_hash": data.get("post_hash") }),
+                )
+                .ok();
+                return;
+            }
+            crate::regional::Admitted::Elsewhere(job) => {
+                s.emit("thread_owner", &crate::regional::info(app, name)).ok();
+                let event = match crate::regional::pass_on(app, name, std::slice::from_ref(&*job)).await {
+                    Ok(()) => "post_queued",
+                    Err(_) => "post_moved",
+                };
+                s.emit(
+                    event,
+                    &json!({ "thread_name": name, "post_hash": data.get("post_hash") }),
+                )
+                .ok();
+                return;
+            }
+        }
+    } else {
+        Box::new(job)
+    };
+    if h.tx.send(Msg::Post(job)).await.is_err() {
         tracing::error!("thread actor for {name} is gone");
     }
 }
@@ -519,6 +563,9 @@ async fn watch(app: &App, s: &SocketRef, name: &Value) {
             m.name == "main",
         )
     };
+    if app.cfg.regional.movable(name) {
+        s.emit("thread_owner", &crate::regional::info(app, name)).ok();
+    }
     let room = format!("thread_{uuid}");
     let stale: Vec<_> = s
         .rooms()

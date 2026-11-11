@@ -53,6 +53,7 @@ pub struct App {
     pub clock: Arc<ids::Clock>,
     pub system_counter: CounterRef,
     pub wal: OnceLock<crate::wal::Wal>,
+    pub regional: crate::regional::Regional,
 }
 
 pub fn now_ms() -> i64 {
@@ -114,6 +115,7 @@ impl App {
             Ok(Some(c)) => {
                 let c: CounterRef = Arc::new(c);
                 self.counters.insert(uuid.to_owned(), c.clone());
+                crate::regional::counter_changed(self, &c).await;
                 Some(c)
             }
             Ok(None) => {

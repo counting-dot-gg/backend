@@ -1,0 +1,17 @@
+[package]
+name = "cgg-decide"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "Decides a post: the rules shared by the socket server and the regional Durable Objects"
+
+[dependencies]
+counting = { path = "../counting" }
+chrono-tz.workspace = true
+serde = { workspace = true, features = ["rc"] }
+serde_json = { workspace = true, features = ["raw_value", "preserve_order"] }
+
+[lints]
+workspace = true

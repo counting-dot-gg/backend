@@ -5,6 +5,7 @@ mod dev;
 mod env;
 mod guard;
 mod perf;
+mod regional;
 mod schema;
 mod server;
 mod suite;
@@ -129,6 +130,19 @@ enum Command {
         #[arg(long)]
         keep: bool,
     },
+    Regional {
+        #[arg(long, default_value_os_t = default_socket_bin())]
+        socket_bin: PathBuf,
+        #[arg(long, default_value = "workers/do-poc")]
+        worker_dir: PathBuf,
+        #[arg(long, default_value = "e2e/regional")]
+        suite_dir: PathBuf,
+        #[arg(long, default_value = "../frontend")]
+        frontend: PathBuf,
+        #[arg(long, default_value = "target/regional")]
+        out: PathBuf,
+        scenarios: Option<String>,
+    },
     Say {
         #[arg(long = "as", default_value_t = 0)]
         who: usize,
@@ -180,6 +194,24 @@ async fn main() -> Result<()> {
             judge(kind, &base.median, &head.median, &out)
         }
         Command::Dev { socket_bin, port, keep } => dev::run(&socket_bin, port, keep).await,
+        Command::Regional {
+            socket_bin,
+            worker_dir,
+            suite_dir,
+            frontend,
+            out,
+            scenarios,
+        } => {
+            regional::run(regional::Options {
+                socket_bin,
+                worker_dir,
+                suite_dir,
+                frontend,
+                scenarios,
+                out,
+            })
+            .await
+        }
         Command::Say {
             who,
             port,

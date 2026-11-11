@@ -15,6 +15,7 @@ path = "src/main.rs"
 cgg-core = { path = "../core" }
 cgg-web = { path = "../web" }
 counting = { path = "../counting" }
+cgg-decide = { path = "../decide" }
 stats = { path = "../stats" }
 progression = { package = "cgg-progression", path = "../progression" }
 tokio = { workspace = true, features = ["full"] }
@@ -28,6 +29,7 @@ serde_json = { workspace = true, features = ["raw_value", "preserve_order"] }
 sqlx.workspace = true
 hmac.workspace = true
 sha2.workspace = true
+reqwest.workspace = true
 base64.workspace = true
 png = "0.17"
 crc32fast = "1"

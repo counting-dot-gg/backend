@@ -471,6 +471,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "cgg-decide"
+version = "0.1.0"
+dependencies = [
+ "chrono-tz",
+ "counting",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "cgg-decide-wasm"
+version = "0.1.0"
+dependencies = [
+ "cgg-decide",
+ "chrono-tz",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "cgg-harness"
 version = "0.1.0"
 dependencies = [
@@ -515,6 +535,7 @@ dependencies = [
  "axum",
  "base64 0.22.1",
  "cgg-core",
+ "cgg-decide",
  "cgg-progression",
  "cgg-web",
  "chrono",
@@ -532,6 +553,7 @@ dependencies = [
  "png",
  "redis",
  "regex",
+ "reqwest",
  "serde",
  "serde_json",
  "sha2",
@@ -551,6 +573,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
+ "cgg-decide",
  "counting",
  "dashmap",
  "fastrand",

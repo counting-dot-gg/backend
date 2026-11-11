@@ -1,0 +1,12 @@
+{
+  "name": "cgg-regional-e2e",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22.12"
+  },
+  "dependencies": {
+    "mysql2": "3.24.5",
+    "socket.io-client": "4.8.4"
+  }
+}

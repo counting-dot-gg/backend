@@ -133,3 +133,56 @@ jobs:
             target/harness/**/socket.log
             target/harness/**/api.log
             target/harness/**/bot.log
+
+  regional:
+    runs-on: ubuntu-latest
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ROOT_PASSWORD: harness
+        ports: ["3306:3306"]
+        options: >-
+          --health-cmd "mysqladmin ping -h 127.0.0.1 -pharness"
+          --health-interval 5s --health-timeout 5s --health-retries 30
+      redis:
+        image: redis:7
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s --health-timeout 5s --health-retries 30
+    env:
+      MYSQL_DB_HOST: 127.0.0.1
+      MYSQL_DB_PORT: "3306"
+      MYSQL_DB_USERNAME: root
+      MYSQL_DB_PASSWORD: harness
+      HARNESS_REDIS_URL: redis://127.0.0.1:6379/9
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: counting-dot-gg/frontend
+          path: frontend
+      - run: rustup toolchain install && rustup target add wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install the worker and the suite
+        run: |
+          npm ci --prefix workers/do-poc
+          npm ci --prefix e2e/regional
+
+      - name: Build
+        run: cargo build --release --locked -p cgg-socket -p cgg-harness
+
+      - name: Regional suite
+        run: target/release/cgg-harness regional --socket-bin target/release/cgg-socket --frontend frontend
+
+      - name: Keep the logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: regional-logs
+          path: target/regional/**/*.log

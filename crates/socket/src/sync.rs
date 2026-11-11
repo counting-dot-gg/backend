@@ -63,6 +63,7 @@ async fn counters(app: &App) -> anyhow::Result<()> {
                 .get(&c.uuid)
                 .is_none_or(|old| old.json.get() != c.json.get());
             if changed {
+                crate::regional::counter_changed(app, &c).await;
                 app.counters.insert(c.uuid.clone(), Arc::new(c));
             }
         }

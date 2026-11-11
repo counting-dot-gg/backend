@@ -22,6 +22,7 @@ pub struct Config {
     pub uploads_dir: PathBuf,
     pub stats_http_url: Option<String>,
     pub stats_api_key: Option<String>,
+    pub do_token_secret: Option<String>,
     pub discord: DiscordOauth,
     pub reddit: RedditOauth,
 }
@@ -78,6 +79,7 @@ impl Config {
             uploads_dir: var("UPLOADS_DIR").unwrap_or("uploads".into()).into(),
             stats_http_url: var("STATS_HTTP_URL"),
             stats_api_key: var("STATS_API_KEY"),
+            do_token_secret: var("DO_TOKEN_SECRET"),
             discord: DiscordOauth {
                 client_id: or_empty("DISCORD_CLIENT_ID"),
                 client_secret: or_empty("DISCORD_CLIENT_SECRET"),
