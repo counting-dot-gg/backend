@@ -2,7 +2,7 @@
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "cgg-do-poc",
   "main": "src/index.ts",
-  "build": { "command": "node --experimental-strip-types --no-warnings tools/wasm.ts" },
+  "build": { "command": "node tools/wasm.mjs" },
   "compatibility_date": "2026-10-20",
   "durable_objects": {
     "bindings": [
