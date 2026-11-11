@@ -14,7 +14,7 @@ anyhow = "1"
 axum = "0.8"
 base64 = "0.22"
 chrono = { version = "0.4", default-features = false, features = ["std", "clock"] }
-chrono-tz = "0.9"
+chrono-tz = "0.10"
 dotenvy = "0.15"
 fastrand = "2"
 getrandom = "0.3"
