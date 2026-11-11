@@ -18,7 +18,7 @@ tracing.workspace = true
 urlencoding = "2"
 socket2 = "0.5"
 anyhow.workspace = true
-dashmap = "5"
+dashmap = "6"
 fastrand.workspace = true
 counting = { path = "../counting" }
 cgg-decide = { path = "../decide" }
