@@ -879,6 +879,23 @@ pub fn next_2048(seq: &str) -> String {
     out.iter().map(|&n| num_to_string(n)).collect::<Vec<_>>().join(" ")
 }
 
+pub fn next_2187(previous: &str) -> Option<String> {
+    let mut tiles = previous
+        .split(' ')
+        .map(str::parse::<u64>)
+        .collect::<Result<Vec<_>, _>>()
+        .ok()?;
+
+    let mut carry = 3;
+    while tiles.ends_with(&[carry, carry]) {
+        tiles.truncate(tiles.len() - 2);
+        carry = carry.checked_mul(3)?;
+    }
+
+    tiles.push(carry);
+    Some(tiles.iter().map(u64::to_string).collect::<Vec<_>>().join(" "))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
