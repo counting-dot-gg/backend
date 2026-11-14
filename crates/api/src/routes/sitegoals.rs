@@ -51,8 +51,7 @@ fn view(g: &Value) -> Value {
 }
 
 pub async fn list_goals(state: &AppState) -> ApiResult<Value> {
-    let mut g = state.goals.inner.lock().await;
-    if let Some((at, v)) = g.as_ref()
+    if let Some((at, v)) = state.goals.inner.lock().await.as_ref()
         && at.elapsed() <= Duration::from_secs(10)
     {
         return Ok(v.clone());
@@ -61,7 +60,7 @@ pub async fn list_goals(state: &AppState) -> ApiResult<Value> {
         .fetch_all(&state.pool)
         .await?;
     let v = Value::Array(rows.iter().map(|r| view(&entity::SITE_GOAL.json(r))).collect());
-    *g = Some((Instant::now(), v.clone()));
+    *state.goals.inner.lock().await = Some((Instant::now(), v.clone()));
     Ok(v)
 }
 

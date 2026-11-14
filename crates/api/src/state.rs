@@ -25,6 +25,7 @@ pub struct Inner {
     pub stats: crate::statsread::store::StatsCaches,
     pub coverage: crate::statsread::coverage::CoverageCaches,
     pub owners: crate::statsread::owners::OwnerCaches,
+    pub in_flight: crate::pool_guard::InFlight,
 }
 
 impl std::ops::Deref for AppState {

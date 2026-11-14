@@ -64,6 +64,7 @@ async fn not_found(req: Request) -> Response {
 async fn timeout(State(state): State<AppState>, req: Request, next: Next) -> Response {
     let limit = state.cfg.request_timeout;
     let what = format!("{} {}", req.method(), req.uri());
+    let _ticket = state.in_flight.enter(what.clone());
     let start = Instant::now();
     match tokio::time::timeout(limit, next.run(req)).await {
         Ok(r) => r,
@@ -95,6 +96,7 @@ pub fn build(state: AppState) -> Router {
 }
 
 pub fn start_background(state: &AppState) {
+    crate::pool_guard::start(state);
     crate::daily_report::start(state);
     let s = state.clone();
     tokio::spawn(async move {

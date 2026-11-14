@@ -10,6 +10,7 @@ mod error;
 mod http;
 mod jobs;
 mod macros;
+mod pool_guard;
 mod rank;
 mod redis_conn;
 mod routes;
@@ -37,6 +38,7 @@ async fn main() -> Result<()> {
     let select_timeout = cfg.select_timeout_ms;
     let pool = MySqlPoolOptions::new()
         .max_connections(cgg_core::var("MYSQL_POOL").and_then(|v| v.parse().ok()).unwrap_or(20))
+        .acquire_timeout(pool_guard::ACQUIRE_TIMEOUT)
         .after_connect(move |conn, _| {
             Box::pin(async move {
                 conn.execute(format!("SET SESSION max_execution_time = {select_timeout}").as_str())
@@ -63,6 +65,7 @@ async fn main() -> Result<()> {
         stats: Default::default(),
         coverage: Default::default(),
         owners: Default::default(),
+        in_flight: Default::default(),
         pool,
         redis,
         cfg,
@@ -90,8 +93,14 @@ async fn main() -> Result<()> {
 
 fn listen(port: u16) -> Result<tokio::net::TcpListener> {
     use socket2::{Domain, Protocol, Socket, Type};
+    let reusable = |domain: Domain| -> std::io::Result<Socket> {
+        let s = Socket::new(domain, Type::STREAM, Some(Protocol::TCP))?;
+        #[cfg(unix)]
+        s.set_reuse_address(true)?;
+        Ok(s)
+    };
     let dual = || -> std::io::Result<Socket> {
-        let s = Socket::new(Domain::IPV6, Type::STREAM, Some(Protocol::TCP))?;
+        let s = reusable(Domain::IPV6)?;
         s.set_only_v6(false)?;
         s.bind(&SocketAddr::from((std::net::Ipv6Addr::UNSPECIFIED, port)).into())?;
         Ok(s)
@@ -99,13 +108,11 @@ fn listen(port: u16) -> Result<tokio::net::TcpListener> {
     let sock = match dual() {
         Ok(s) => s,
         Err(_) => {
-            let s = Socket::new(Domain::IPV4, Type::STREAM, Some(Protocol::TCP))?;
+            let s = reusable(Domain::IPV4)?;
             s.bind(&SocketAddr::from((std::net::Ipv4Addr::UNSPECIFIED, port)).into())?;
             s
         }
     };
-    #[cfg(unix)]
-    sock.set_reuse_address(true)?;
     sock.listen(1024)?;
     sock.set_nonblocking(true)?;
     Ok(tokio::net::TcpListener::from_std(sock.into())?)
