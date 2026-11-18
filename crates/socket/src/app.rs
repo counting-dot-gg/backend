@@ -114,8 +114,8 @@ impl App {
         match db::counter_by_uuid(&self.pool, uuid).await {
             Ok(Some(c)) => {
                 let c: CounterRef = Arc::new(c);
-                self.counters.insert(uuid.to_owned(), c.clone());
-                crate::regional::counter_changed(self, &c).await;
+                let old = self.counters.insert(uuid.to_owned(), c.clone());
+                crate::regional::counter_changed(self, old.as_deref(), &c).await;
                 Some(c)
             }
             Ok(None) => {

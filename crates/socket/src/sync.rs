@@ -58,12 +58,9 @@ async fn counters(app: &App) -> anyhow::Result<()> {
     let cached: Vec<String> = app.counters.iter().map(|e| e.key().clone()).collect();
     for chunk in cached.chunks(500) {
         for c in db::counters_by_uuids(&app.pool, chunk).await? {
-            let changed = app
-                .counters
-                .get(&c.uuid)
-                .is_none_or(|old| old.json.get() != c.json.get());
-            if changed {
-                crate::regional::counter_changed(app, &c).await;
+            let old = app.counters.get(&c.uuid).map(|e| e.value().clone());
+            if old.as_ref().is_none_or(|old| old.json.get() != c.json.get()) {
+                crate::regional::counter_changed(app, old.as_deref(), &c).await;
                 app.counters.insert(c.uuid.clone(), Arc::new(c));
             }
         }

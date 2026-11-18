@@ -62,6 +62,7 @@ type Outcome =
 
 const RECENT_HASHES = 512
 const RETRY_MS = 1000
+const MAX_RETRY_MS = 60_000
 const QUIET_MS = 2000
 const DEFAULT_LIMITS: Limits = { burstPerSec: 25, on: true }
 
@@ -102,6 +103,7 @@ export class ThreadDO extends DurableObject<Env> {
   private cut = false
   private forwardFailed = false
   private retryScheduled = false
+  private retryMs = RETRY_MS
   private unreadySince = 0
   private sending: Promise<void> | null = null
   private pulling: Promise<boolean> | null = null
@@ -122,7 +124,7 @@ export class ThreadDO extends DurableObject<Env> {
     limits: Limits | undefined,
   ): Promise<{ ok: boolean; colo: string; reason?: string }> {
     await this.restore()
-    if (!(await this.reachesVps())) return { ok: false, colo: await coloOf(this.ctx.storage), reason: 'no_return_path' }
+    if (!(await this.reachesVps(thread))) return { ok: false, colo: await coloOf(this.ctx.storage), reason: 'no_return_path' }
     this.ownership = { thread, epoch, owning: true }
     this.broken = false
     this.slowMs = 0
@@ -400,9 +402,24 @@ export class ThreadDO extends DurableObject<Env> {
     await Promise.all([...seats].filter((u): u is string => !!u && u !== 'anonymous').map(u => this.learnCounter(u)))
   }
 
-  private async reachesVps(): Promise<boolean> {
-    const { status } = await this.askVps('counter', { uuid: 'return-path' })
-    return status >= 200 && status < 500
+  private async reachesVps(thread: string): Promise<boolean> {
+    const [counter, ingest] = await Promise.all([
+      this.vpsError(new URL('counter', this.env.INGEST_URL), { uuid: 'return-path' }),
+      this.vpsError(this.env.INGEST_URL, { thread, epoch: 0, posts: [] }),
+    ])
+    return counter === 'no_counter' && ingest === 'stale_epoch'
+  }
+
+  private async vpsError(url: string | URL, ask: object): Promise<string | null> {
+    if (!this.env.INGEST_URL || this.cut) return null
+    const body = JSON.stringify(ask)
+    try {
+      const response = await fetch(url, { method: 'POST', headers: await signedHeaders(this.env.DO_SHARED_SECRET, body), body })
+      const reply = (await response.json()) as { error?: unknown }
+      return typeof reply.error === 'string' ? reply.error : null
+    } catch {
+      return null
+    }
   }
 
   private async askVps<T>(what: 'counter' | 'snapshot' | 'late', ask: object): Promise<{ status: number; body: T | null }> {
@@ -504,6 +521,7 @@ export class ThreadDO extends DurableObject<Env> {
         return
       }
       this.unacked = this.unacked.filter(f => f.seq > acked)
+      this.retryMs = RETRY_MS
     }
     if (this.backlogStored && this.unacked.length === 0) {
       await this.ctx.storage.put('unacked', [])
@@ -516,7 +534,8 @@ export class ThreadDO extends DurableObject<Env> {
     this.retryScheduled = true
     await this.ctx.storage.put('unacked', this.unacked)
     this.backlogStored = true
-    await this.ctx.storage.setAlarm(Date.now() + RETRY_MS)
+    await this.ctx.storage.setAlarm(Date.now() + this.retryMs)
+    this.retryMs = Math.min(this.retryMs * 2, MAX_RETRY_MS)
   }
 
   private async send(batch: Forward[]): Promise<number | null> {

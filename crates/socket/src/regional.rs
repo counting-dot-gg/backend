@@ -72,9 +72,9 @@ impl RegionalConfig {
             secret: var("DO_SHARED_SECRET").unwrap_or_default(),
             cooldown_ms: var("DO_MOVE_COOLDOWN_SECS")
                 .and_then(|v| v.parse::<i64>().ok())
-                .unwrap_or(600)
+                .unwrap_or(30)
                 * 1000,
-            lull_ms: var("DO_MOVE_LULL_MS").and_then(|v| v.parse().ok()).unwrap_or(5000),
+            lull_ms: var("DO_MOVE_LULL_MS").and_then(|v| v.parse().ok()).unwrap_or(0),
             daily_post_limit: var("DO_DAILY_POST_LIMIT")
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(1_600_000),
@@ -118,6 +118,7 @@ pub struct Pending {
 #[derive(Clone, Copy, PartialEq)]
 enum Mover {
     Person,
+    Staff,
     Auto,
 }
 
@@ -584,7 +585,12 @@ pub async fn request_move(app: &App, s: &SocketRef, data: &Value) {
         Ok(t) => t,
         Err(reason) => return refuse(reason),
     };
-    if let Err(reason) = claim_move(app, thread, &h, &target, Mover::Person) {
+    let mover = if counter.has_role("admin") || counter.has_role("mod") {
+        Mover::Staff
+    } else {
+        Mover::Person
+    };
+    if let Err(reason) = claim_move(app, thread, &h, &target, mover) {
         return refuse(reason);
     }
     let hold = app.cfg.regional.manual_hold_ms;
@@ -1279,7 +1285,22 @@ pub async fn meta_changed(app: &App, thread: &str) {
     }
 }
 
-pub async fn counter_changed(app: &App, c: &Counter) {
+const UNJUDGED_COUNTER_FIELDS: [&str; 1] = ["xp"];
+
+fn judged_fields(c: &Counter) -> impl Iterator<Item = (&String, &Value)> {
+    c.fields
+        .iter()
+        .filter(|(k, _)| !UNJUDGED_COUNTER_FIELDS.contains(&k.as_str()))
+}
+
+pub fn judged_alike(old: &Counter, new: &Counter) -> bool {
+    judged_fields(old).eq(judged_fields(new))
+}
+
+pub async fn counter_changed(app: &App, old: Option<&Counter>, c: &Counter) {
+    if old.is_some_and(|old| judged_alike(old, c)) {
+        return;
+    }
     for thread in app.regional.remote_threads() {
         let o = app.regional.get(&thread);
         let Some(region) = o.region else { continue };
@@ -1489,6 +1510,19 @@ async fn accept_posts(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn counter(fields: Value) -> Counter {
+        Counter::from_fields(fields.as_object().unwrap().clone())
+    }
+
+    #[test]
+    fn xp_gain_alone_is_not_pushed_to_regions() {
+        let before = counter(json!({ "uuid": "a", "roles": ["counter"], "xp": "100" }));
+        let gained = counter(json!({ "uuid": "a", "roles": ["counter"], "xp": "110" }));
+        let banned = counter(json!({ "uuid": "a", "roles": ["banned"], "xp": "110" }));
+        assert!(judged_alike(&before, &gained));
+        assert!(!judged_alike(&gained, &banned));
+    }
 
     fn signed(secret: &str, timestamp: i64, body: &[u8]) -> HeaderMap {
         let mut h = HeaderMap::new();
