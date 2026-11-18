@@ -12,7 +12,7 @@ use crate::{
     counter_stats::update_counter_stats,
     db::{
         get_last_mistake_post, get_max_post_id, get_max_post_id_before_ts, get_min_post_id_after_ts, load_all_threads,
-        stream_posts_range,
+        post_ids_with_times, stream_posts_range,
     },
     models::{
         AccuracyEntry, AllStats, CounterStats, CounterThreadStats, Post, Thread, ThreadStats, combine_leaderboards,
@@ -1523,7 +1523,51 @@ async fn resolve_id_range(
         last + 1
     };
 
-    Ok((start_id, end_id))
+    if !continues_live(opts) || opts.force_init || start_id > end_id {
+        return Ok((start_id, end_id));
+    }
+    let scan_after = (start_id - 1).max(end_id.saturating_sub(GAP_SCAN_IDS));
+    let mut settled = scan_after;
+    for attempt in 0..GAP_RECHECKS {
+        if attempt > 0 {
+            tokio::time::sleep(GAP_RECHECK_WAIT).await;
+        }
+        let present = post_ids_with_times(pool, scan_after, end_id).await?;
+        settled = settled_end(
+            scan_after,
+            end_id,
+            &present,
+            chrono::Utc::now().timestamp_millis(),
+            GAP_GRACE_MS,
+        );
+        if settled == end_id {
+            break;
+        }
+    }
+    if settled < end_id {
+        tracing::info!(
+            held_at = settled + 1,
+            newest = end_id,
+            "Holding before a post still being written"
+        );
+    }
+    Ok((start_id, settled))
+}
+
+const GAP_SCAN_IDS: u64 = 20_000;
+const GAP_GRACE_MS: i64 = 120_000;
+const GAP_RECHECKS: u32 = 4;
+const GAP_RECHECK_WAIT: std::time::Duration = std::time::Duration::from_millis(250);
+
+pub fn settled_end(after: u64, newest: u64, present: &[(u64, i64)], now_ms: i64, grace_ms: i64) -> u64 {
+    let mut expected = after + 1;
+    for &(id, at_ms) in present {
+        if id > expected && now_ms - at_ms < grace_ms {
+            return expected - 1;
+        }
+        expected = id + 1;
+    }
+    newest
 }
 
 fn classify_posts(posts: &[Post], thread: &Thread) -> (Vec<Post>, Vec<Post>, Vec<Post>) {
@@ -1816,6 +1860,33 @@ mod day_map_write_tests {
 #[cfg(test)]
 mod speed_tail_tests {
     use super::*;
+
+    const NOW: i64 = 1_000_000_000;
+    const GRACE: i64 = 120_000;
+
+    #[test]
+    fn a_lower_id_still_being_written_holds_the_run_before_it() {
+        let present = [(101, NOW - 50), (102, NOW - 40), (104, NOW - 10), (105, NOW - 5)];
+        assert_eq!(settled_end(100, 105, &present, NOW, GRACE), 102);
+    }
+
+    #[test]
+    fn a_gap_that_never_filled_is_passed_once_its_neighbour_is_old() {
+        let present = [(101, NOW - 300_000), (103, NOW - 200_000), (104, NOW - 10)];
+        assert_eq!(settled_end(100, 104, &present, NOW, GRACE), 104);
+    }
+
+    #[test]
+    fn a_hole_right_after_the_cursor_holds_everything() {
+        let present = [(102, NOW - 10), (103, NOW - 5)];
+        assert_eq!(settled_end(100, 103, &present, NOW, GRACE), 100);
+    }
+
+    #[test]
+    fn dense_ids_run_to_the_newest() {
+        let present = [(101, NOW - 3), (102, NOW - 2), (103, NOW - 1)];
+        assert_eq!(settled_end(100, 103, &present, NOW, GRACE), 103);
+    }
 
     fn opts(force_init: bool, thread: Option<&str>, range: Option<(i64, i64)>) -> StatsOptions {
         StatsOptions {

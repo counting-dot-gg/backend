@@ -137,6 +137,24 @@ pub async fn get_max_post_id(pool: &MySqlPool) -> Result<u64> {
     Ok(row.max_id.unwrap_or(0) as u64)
 }
 
+#[derive(FromRow)]
+struct IdTimeRow {
+    id: i64,
+    timestamp: String,
+}
+
+pub async fn post_ids_with_times(pool: &MySqlPool, after: u64, upto: u64) -> Result<Vec<(u64, i64)>> {
+    let rows: Vec<IdTimeRow> = sqlx::query_as("SELECT id, timestamp FROM post WHERE id > ? AND id <= ? ORDER BY id")
+        .bind(after)
+        .bind(upto)
+        .fetch_all(pool)
+        .await?;
+    Ok(rows
+        .into_iter()
+        .map(|r| (r.id as u64, r.timestamp.parse::<f64>().map_or(0, |ms| ms as i64)))
+        .collect())
+}
+
 pub(crate) fn ts_ms_key(ts_ms: i64) -> String {
     format!("{:013}", ts_ms.max(0))
 }
