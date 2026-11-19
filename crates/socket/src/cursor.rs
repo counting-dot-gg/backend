@@ -51,6 +51,10 @@ impl Checkpoints {
         a
     }
 
+    pub fn unregister(&self, name: &str) {
+        self.list.lock().retain(|(n, _)| n != name);
+    }
+
     pub fn min(&self) -> u64 {
         self.list
             .lock()

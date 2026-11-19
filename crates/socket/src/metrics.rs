@@ -43,6 +43,14 @@ fn bucket_of(ns: u64) -> usize {
     (lz * 4 + frac).min(BUCKETS - 1)
 }
 
+const EXPORT_MIN_US: f64 = 256.0;
+const EXPORT_MAX_US: f64 = 33_554_432.0;
+
+fn exported(b: usize) -> bool {
+    let upper = bucket_upper_us(b);
+    b % 2 == 1 && (EXPORT_MIN_US..=EXPORT_MAX_US).contains(&upper)
+}
+
 fn bucket_upper_us(b: usize) -> f64 {
     let (p, f) = (b / 4, b % 4);
     (1u64 << p) as f64 * (1.0 + (f as f64 + 1.0) / 4.0)
@@ -97,7 +105,9 @@ impl Histogram {
         let mut acc = 0;
         for (i, c) in self.counts.iter().enumerate() {
             acc += c.load(Ordering::Relaxed);
-            let _ = writeln!(out, "{name}_bucket{{le=\"{}\"}} {acc}", bucket_upper_us(i) / 1e6);
+            if exported(i) {
+                let _ = writeln!(out, "{name}_bucket{{le=\"{}\"}} {acc}", bucket_upper_us(i) / 1e6);
+            }
         }
         let _ = writeln!(out, "{name}_bucket{{le=\"+Inf\"}} {acc}");
         let _ = writeln!(out, "{name}_sum {}", self.sum_ns.load(Ordering::Relaxed) as f64 / 1e9);
@@ -275,5 +285,32 @@ mod tests {
         assert!(out.contains("t_count 1000\n"));
         assert!(out.contains("t_max_1m 0.001\n"));
         assert!(!out.contains('\r'));
+    }
+
+    #[test]
+    fn exported_buckets_are_few_and_cumulative() {
+        let h = Histogram::default();
+        for us in [100u64, 900, 3_000, 20_000, 60_000_000] {
+            h.record(Duration::from_micros(us));
+        }
+        let mut out = String::new();
+        h.write(&mut out, "t", "test");
+        let counts: Vec<(f64, u64)> = out
+            .lines()
+            .filter_map(|l| l.strip_prefix("t_bucket{le=\""))
+            .filter(|l| !l.starts_with('+'))
+            .filter_map(|l| {
+                let (le, n) = l.split_once("\"} ")?;
+                Some((le.parse().ok()?, n.parse().ok()?))
+            })
+            .collect();
+        assert_eq!(counts.len(), 35);
+        assert!(counts.windows(2).all(|w| w[0].0 < w[1].0 && w[0].1 <= w[1].1));
+        assert_eq!(counts.first().unwrap().1, 1);
+        assert_eq!(counts.last().unwrap().1, 4);
+        assert!(out.contains("t_bucket{le=\"+Inf\"} 5\n"));
+        let at = |le: f64| counts.iter().find(|c| (c.0 - le).abs() < 1e-9).map(|c| c.1);
+        assert_eq!(at(0.024576), Some(4));
+        assert_eq!(at(0.016384), Some(3));
     }
 }

@@ -46,6 +46,16 @@ impl Entity {
         Value::Object(out)
     }
 
+    pub fn ordered(&self, v: &Value) -> Value {
+        let mut out = Map::new();
+        for c in self.columns.iter().filter(|c| !c.hidden) {
+            if let Some(x) = v.get(c.prop) {
+                out.insert(c.prop.to_owned(), x.clone());
+            }
+        }
+        Value::Object(out)
+    }
+
     pub fn select(&self, alias: &str) -> String {
         self.columns
             .iter()

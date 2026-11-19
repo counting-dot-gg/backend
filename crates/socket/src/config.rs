@@ -35,6 +35,7 @@ pub struct Config {
     pub stats_addr: String,
     pub redis_url: String,
     pub host_url: String,
+    pub clickhouse: Option<ClickhouseConfig>,
 }
 
 #[derive(Debug, Clone)]
@@ -133,7 +134,44 @@ impl Config {
                 )
             }),
             host_url: var("HOST_URL").unwrap_or_default(),
+            clickhouse: ClickhouseConfig::from_env()?,
         })
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct ClickhouseConfig {
+    pub url: String,
+    pub user: Option<String>,
+    pub password: Option<String>,
+    pub database: String,
+    pub flush_every: Duration,
+    pub batch: usize,
+    pub max_lag_records: u64,
+    pub backfill_chunk: usize,
+    pub backfill_rate: u64,
+}
+
+impl ClickhouseConfig {
+    fn from_env() -> Result<Option<ClickhouseConfig>> {
+        let Some(url) = var("CLICKHOUSE_URL") else {
+            return Ok(None);
+        };
+        let database = var("CLICKHOUSE_DATABASE").unwrap_or("cgg".into());
+        if !database.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
+            bail!("CLICKHOUSE_DATABASE must be letters, digits or _");
+        }
+        Ok(Some(ClickhouseConfig {
+            url: url.trim_end_matches('/').to_owned(),
+            user: var("CLICKHOUSE_USER"),
+            password: var("CLICKHOUSE_PASSWORD"),
+            database,
+            flush_every: Duration::from_millis(var("CLICKHOUSE_FLUSH_MS").unwrap_or("1000".into()).parse()?),
+            batch: var("CLICKHOUSE_BATCH").unwrap_or("5000".into()).parse()?,
+            max_lag_records: var("CLICKHOUSE_MAX_LAG").unwrap_or("5000000".into()).parse()?,
+            backfill_chunk: var("CLICKHOUSE_BACKFILL_CHUNK").unwrap_or("50000".into()).parse()?,
+            backfill_rate: var("CLICKHOUSE_BACKFILL_RATE").unwrap_or("20000".into()).parse()?,
+        }))
     }
 }
 

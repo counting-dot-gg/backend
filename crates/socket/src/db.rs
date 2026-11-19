@@ -186,7 +186,7 @@ pub fn post_from_row(r: &MySqlRow) -> Post {
 
 pub struct ThreadBoot {
     pub recent_valid: Vec<Post>,
-    pub last_post: Option<Post>,
+    pub tail: Vec<Post>,
     pub last_stricken_id: Option<u64>,
     pub streak: u64,
     pub slow_recent: Vec<(String, f64)>,
@@ -203,14 +203,7 @@ pub async fn thread_boot(pool: &MySqlPool, t: &ThreadMeta, now_ms: f64) -> Resul
     .iter()
     .map(post_from_row)
     .collect();
-    let last_post = sqlx::query(&format!(
-        "SELECT {POST_COLS} FROM post FORCE INDEX (n_thread_id) WHERE threadId = ? ORDER BY id DESC LIMIT 1"
-    ))
-    .bind(t.id)
-    .fetch_optional(pool)
-    .await?
-    .as_ref()
-    .map(post_from_row);
+    let tail = thread_tail(pool, t.id).await?;
     let last_stricken_id: Option<u64> = if t.validation_type.is_empty() {
         None
     } else {
@@ -261,11 +254,26 @@ pub async fn thread_boot(pool: &MySqlPool, t: &ThreadMeta, now_ms: f64) -> Resul
     }
     Ok(ThreadBoot {
         recent_valid,
-        last_post,
+        tail,
         last_stricken_id,
         streak: streak as u64,
         slow_recent,
     })
+}
+
+pub async fn thread_tail(pool: &MySqlPool, thread_id: u32) -> Result<Vec<Post>> {
+    let mut tail: Vec<Post> = sqlx::query(&format!(
+        "SELECT {POST_COLS} FROM post FORCE INDEX (n_thread_id) WHERE threadId = ? ORDER BY id DESC LIMIT {}",
+        crate::thread::RING
+    ))
+    .bind(thread_id)
+    .fetch_all(pool)
+    .await?
+    .iter()
+    .map(post_from_row)
+    .collect();
+    tail.reverse();
+    Ok(tail)
 }
 
 pub async fn max_post_id(pool: &MySqlPool) -> Result<u64> {

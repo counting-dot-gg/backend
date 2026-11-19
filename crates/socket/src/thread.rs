@@ -105,6 +105,7 @@ impl ThreadHandle {
 pub struct State {
     pub book: Book,
     pub last_valid_counter: Option<CounterRef>,
+    pub ring: VecDeque<Arc<Post>>,
 }
 
 struct Actor {
@@ -116,13 +117,13 @@ struct Actor {
     local_change: Option<Instant>,
 }
 
-pub fn spawn(meta: ThreadMeta, st: State, ctx: Arc<Ctx>) -> Arc<ThreadHandle> {
+pub fn spawn(meta: ThreadMeta, mut st: State, ctx: Arc<Ctx>) -> Arc<ThreadHandle> {
     let (tx, rx) = mpsc::channel(4096);
     let last_count = match (&st.book.last_valid, &st.last_valid_counter) {
         (Some(p), Some(c)) => Some((p.clone(), c.clone())),
         _ => None,
     };
-    let ring: VecDeque<Arc<Post>> = st.book.last_post.iter().cloned().collect();
+    let ring = std::mem::take(&mut st.ring);
     let h = Arc::new(ThreadHandle {
         meta: RwLock::new(meta.clone()),
         tx,
@@ -478,6 +479,7 @@ static SLOW_POST: std::sync::LazyLock<Duration> = std::sync::LazyLock::new(|| {
 
 pub fn boot_state(meta: &ThreadMeta, b: crate::db::ThreadBoot, last_valid_counter: Option<CounterRef>) -> State {
     let recent: VecDeque<Arc<Post>> = b.recent_valid.into_iter().map(Arc::new).collect();
+    let ring: VecDeque<Arc<Post>> = b.tail.into_iter().map(Arc::new).collect();
     let mut last_valid = recent.front().cloned();
     if meta.reset_on_mistakes
         && let (Some(lv), Some(m)) = (&last_valid, b.last_stricken_id)
@@ -490,10 +492,11 @@ pub fn boot_state(meta: &ThreadMeta, b: crate::db::ThreadBoot, last_valid_counte
         book: Book {
             last_valid,
             recent_valid: recent,
-            last_post: b.last_post.map(Arc::new),
+            last_post: ring.back().cloned(),
             streak: b.streak,
             slow_last: b.slow_recent.into_iter().map(|(a, t)| (author_key(&a), t)).collect(),
         },
+        ring,
     }
 }
 

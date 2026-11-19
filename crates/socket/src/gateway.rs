@@ -540,8 +540,11 @@ async fn post(app: &App, s: &SocketRef, data: Value) {
     }
 }
 
-async fn watch(app: &App, s: &SocketRef, name: &Value) {
-    let Some(name) = name.as_str() else { return };
+async fn watch(app: &App, s: &SocketRef, request: &Value) {
+    let Some(name) = request.as_str().or_else(|| request["thread_name"].as_str()) else {
+        return;
+    };
+    let after = request["after"].as_str();
     let counter = counter_of(app, s).await;
     if name == "all" {
         s.join("thread_all");
@@ -574,6 +577,9 @@ async fn watch(app: &App, s: &SocketRef, name: &Value) {
         .collect();
     s.leave(stale);
     s.join(room.clone());
+    if let Some(after) = after {
+        crate::tail::catch_up(app, s, &h, name, after).await;
+    }
     let splits = features::cached_splits(app, &uuid).await;
     if !splits.is_empty() {
         s.emit("recent_splits", &splits).ok();

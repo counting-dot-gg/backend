@@ -7,6 +7,7 @@ use std::path::Path;
 use std::pin::Pin;
 use std::time::{Duration, Instant};
 
+use crate::clickhouse::{Clickhouse, expected_rows, first_difference};
 use crate::client::Client;
 use crate::env::{Account, Target, ThreadSpec, seed};
 use crate::server::Socket;
@@ -51,7 +52,7 @@ impl Ctx {
 
 type Case = for<'a> fn(&'a mut Ctx) -> Pin<Box<dyn Future<Output = Result<()>> + 'a>>;
 
-const THREADS: [ThreadSpec; 12] = [
+const THREADS: [ThreadSpec; 14] = [
     ThreadSpec {
         name: "h_order",
         allow_double_posts: false,
@@ -100,9 +101,17 @@ const THREADS: [ThreadSpec; 12] = [
         name: "h_split",
         allow_double_posts: true,
     },
+    ThreadSpec {
+        name: "h_clickhouse",
+        allow_double_posts: true,
+    },
+    ThreadSpec {
+        name: "h_catchup",
+        allow_double_posts: true,
+    },
 ];
 
-const CASES: [(&str, Case); 17] = [
+const CASES: [(&str, Case); 19] = [
     ("counts_alternate_in_order", |c| Box::pin(counts_alternate_in_order(c))),
     ("wrong_count_is_rejected", |c| Box::pin(wrong_count_is_rejected(c))),
     ("double_post_is_rejected", |c| Box::pin(double_post_is_rejected(c))),
@@ -142,6 +151,10 @@ const CASES: [(&str, Case); 17] = [
         Box::pin(chosen_shuffle_seed_pays_no_xp(c))
     }),
     ("split_lands_at_a_hundred", |c| Box::pin(split_lands_at_a_hundred(c))),
+    ("clickhouse_matches_mysql", |c| Box::pin(clickhouse_matches_mysql(c))),
+    ("watch_catches_up_from_the_newest_seen", |c| {
+        Box::pin(watch_catches_up_from_the_newest_seen(c))
+    }),
 ];
 
 pub async fn run(bin: &Path, target: &Target, workdir: &Path, only: Option<&str>) -> Result<Vec<CaseResult>> {
@@ -529,6 +542,116 @@ async fn moderator_deletes_a_comment(ctx: &mut Ctx) -> Result<()> {
     a.wait_for(WAIT, |e| e.name == "deleteComment" && e.data["uuid"] == uuid.as_str())
         .await?;
     Ok(())
+}
+
+async fn catch_up_after(ctx: &Ctx, after: &str) -> Result<Value> {
+    let mut b = ctx.client(1).await?;
+    b.emit("watch", json!({ "thread_name": "h_catchup", "after": after }))?;
+    Ok(b.wait_for(WAIT, |e| e.name == "catchUp").await?.data)
+}
+
+async fn watch_catches_up_from_the_newest_seen(ctx: &mut Ctx) -> Result<()> {
+    let mut a = ctx.watching(0, "h_catchup").await?;
+    let mut uuids = Vec::new();
+    for n in 1..=4 {
+        let text = format!("{n} catch");
+        a.post("h_catchup", &text)?;
+        let seen = a.own_post(&text, WAIT).await?;
+        uuids.push(seen.data["post"]["uuid"].as_str().unwrap_or_default().to_owned());
+    }
+    let got = catch_up_after(ctx, &uuids[1]).await?;
+    let texts: Vec<&str> = got["posts"]
+        .as_array()
+        .map(|p| p.iter().filter_map(|x| x["rawText"].as_str()).collect())
+        .unwrap_or_default();
+    ensure!(
+        got["complete"] == true,
+        "catch-up after a known post was incomplete: {got}"
+    );
+    ensure!(texts == ["3 catch", "4 catch"], "caught up with {texts:?}");
+    ensure!(
+        got["counters"].as_array().is_some_and(|c| !c.is_empty()),
+        "catch-up came without authors"
+    );
+    let newest = catch_up_after(ctx, &uuids[3]).await?;
+    ensure!(
+        newest["complete"] == true && newest["posts"].as_array().is_some_and(|p| p.is_empty()),
+        "catch-up from the newest post: {newest}"
+    );
+    let unknown = catch_up_after(ctx, "not-a-post").await?;
+    ensure!(unknown["complete"] == false, "catch-up from an unknown post: {unknown}");
+    Ok(())
+}
+
+async fn clickhouse_disagreement(ctx: &Ctx, ch: &Clickhouse, posts: i64) -> Result<Option<String>> {
+    let stored: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM post p JOIN thread t ON t.uuid = p.thread WHERE t.name = 'h_clickhouse'",
+    )
+    .fetch_one(&ctx.pool)
+    .await?;
+    if stored != posts {
+        return Ok(Some(format!("{stored} of {posts} posts in MySQL")));
+    }
+    if let Some(diff) = first_difference(&expected_rows(&ctx.pool).await?, &ch.stored_rows().await?) {
+        return Ok(Some(diff));
+    }
+    let posts = ch.count("post").await?;
+    let authored = ch.count("post_by_author").await?;
+    Ok((posts != authored).then(|| format!("{posts} posts but {authored} author rows")))
+}
+
+async fn clickhouse_agrees(ctx: &Ctx, ch: &Clickhouse, posts: i64, when: &str) -> Result<()> {
+    let started = Instant::now();
+    loop {
+        match clickhouse_disagreement(ctx, ch, posts).await? {
+            None => return Ok(()),
+            Some(diff) if started.elapsed() > WAIT => bail!("{when}: {diff}"),
+            Some(_) => tokio::time::sleep(Duration::from_millis(200)).await,
+        }
+    }
+}
+
+async fn clickhouse_matches_mysql(ctx: &mut Ctx) -> Result<()> {
+    let Some(url) = ctx.target.clickhouse_url.clone() else {
+        return Ok(());
+    };
+    let ch = Clickhouse::new(&url)?;
+    sqlx::query("UPDATE counters SET roles = '[\"counter\",\"mod\"]' WHERE uuid = ?")
+        .bind(&ctx.account(1).uuid)
+        .execute(&ctx.pool)
+        .await?;
+    let mut a = ctx.watching(0, "h_clickhouse").await?;
+    let m = ctx.watching(1, "h_clickhouse").await?;
+    let mut uuid = String::new();
+    for text in ["1 one", "2", "3 three", "5", "4 four"] {
+        a.post("h_clickhouse", text)?;
+        let posted = a.own_post(text, WAIT).await?;
+        if text == "3 three" {
+            uuid = posted.data["post"]["uuid"].as_str().unwrap_or_default().to_owned();
+        }
+    }
+    m.emit("deleteComment", json!({ "uuid": uuid }))?;
+    a.wait_for(WAIT, |e| e.name == "deleteComment" && e.data["uuid"] == uuid.as_str())
+        .await?;
+    clickhouse_agrees(ctx, &ch, 5, "live posts and a comment delete").await?;
+    drop((a, m));
+
+    ctx.socket.kill_and_restart().await?;
+    let mut a = ctx.watching(0, "h_clickhouse").await?;
+    a.post("h_clickhouse", "6 after a crash")?;
+    a.own_post("6 after a crash", WAIT).await?;
+    clickhouse_agrees(ctx, &ch, 6, "after a crash").await?;
+    drop(a);
+
+    ctx.socket.stop().await?;
+    ch.query("TRUNCATE TABLE post").await?;
+    ch.query("TRUNCATE TABLE post_by_author").await?;
+    let _ = std::fs::remove_file(ctx.socket.wal_dir().join("clickhouse.cursor"));
+    ctx.socket.start_again().await?;
+    let mut a = ctx.watching(0, "h_clickhouse").await?;
+    a.post("h_clickhouse", "7")?;
+    a.own_post("7", WAIT).await?;
+    clickhouse_agrees(ctx, &ch, 7, "after ClickHouse lost everything").await
 }
 
 async fn split_lands_at_a_hundred(ctx: &mut Ctx) -> Result<()> {

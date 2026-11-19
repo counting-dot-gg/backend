@@ -11,6 +11,9 @@ pub async fn handle(app: Arc<App>, cmd: String, d: Value) -> Option<Value> {
     let s = |k: &str| d[k].as_str().unwrap_or("").to_owned();
     match cmd.as_str() {
         "latestCounts" => Some(features::latest_counts(&app)),
+        "newestPosts" => crate::tail::newest_command(&app, &d),
+        "postInMemory" => Some(crate::tail::post_command(&app, &d)),
+        "reloadThreadTail" => Some(crate::tail::reload_command(&app, &d).await),
         "defaultPage" => {
             let page = features::default_page_tcp(&app).await;
             if page.is_none() {

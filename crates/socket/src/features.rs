@@ -15,14 +15,16 @@ use std::time::{Duration, Instant};
 static OVERLAY: LazyLock<DashMap<String, (Arc<Post>, Instant)>> = LazyLock::new(DashMap::new);
 static MUTATE: LazyLock<tokio::sync::Mutex<()>> = LazyLock::new(|| tokio::sync::Mutex::new(()));
 
-pub async fn find_post(app: &App, uuid: &str) -> Option<Arc<Post>> {
+pub fn find_post_in_memory(app: &App, uuid: &str) -> Option<Arc<Post>> {
     if let Some(p) = OVERLAY.get(uuid) {
         return Some(p.0.clone());
     }
-    for h in app.threads_by_uuid.iter() {
-        if let Some(p) = h.ring_find(uuid) {
-            return Some(p);
-        }
+    app.threads_by_uuid.iter().find_map(|h| h.ring_find(uuid))
+}
+
+pub async fn find_post(app: &App, uuid: &str) -> Option<Arc<Post>> {
+    if let Some(p) = find_post_in_memory(app, uuid) {
+        return Some(p);
     }
     db::post_by_uuid(&app.pool, uuid).await.ok().flatten().map(Arc::new)
 }

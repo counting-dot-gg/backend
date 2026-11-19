@@ -1,4 +1,4 @@
-use anyhow::{Result, ensure};
+use anyhow::{Context, Result, ensure};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -40,8 +40,13 @@ pub async fn round(bin: &Path, target: &Target, workdir: &Path, load: Load) -> R
 
     let mut watchers = Vec::new();
     for (i, acc) in accounts[names.len()..].iter().enumerate() {
-        let mut w = Client::connect(socket.port, Some(&acc.cookie)).await?;
-        w.watch(&names[i % names.len()]).await?;
+        let connecting = Instant::now();
+        let mut w = Client::connect(socket.port, Some(&acc.cookie))
+            .await
+            .with_context(|| format!("connect watcher {i} after {:?}", connecting.elapsed()))?;
+        w.watch(&names[i % names.len()])
+            .await
+            .with_context(|| format!("watcher {i} watch after {:?}", connecting.elapsed()))?;
         watchers.push(w.drain());
     }
 
@@ -108,8 +113,13 @@ struct Run {
 }
 
 async fn closed_loop(port: u16, cookie: &str, thread: &str, first: i64, duration: Duration) -> Result<Run> {
-    let mut c = Client::connect(port, Some(cookie)).await?;
-    c.watch(thread).await?;
+    let connecting = Instant::now();
+    let mut c = Client::connect(port, Some(cookie))
+        .await
+        .with_context(|| format!("connect for {thread} after {:?}", connecting.elapsed()))?;
+    c.watch(thread)
+        .await
+        .with_context(|| format!("watch {thread} after {:?}", connecting.elapsed()))?;
     let mut latencies_ms = Vec::new();
     let mut n = first;
     let started = Instant::now();

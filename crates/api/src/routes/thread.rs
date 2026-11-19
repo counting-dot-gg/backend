@@ -1824,6 +1824,52 @@ async fn recent_counts(
     Ok((posts, counters, oldest))
 }
 
+const SOCKET_READ: Duration = Duration::from_millis(300);
+
+async fn newest_from_socket(state: &AppState, thread_name: &str, take: usize) -> Option<(Vec<Value>, bool)> {
+    let v = state
+        .socket_calls
+        .call(
+            "newestPosts",
+            json!({ "thread_name": thread_name, "limit": take }),
+            SOCKET_READ,
+        )
+        .await?;
+    let posts: Vec<Value> = v["posts"].as_array()?.iter().map(|p| entity::POST.ordered(p)).collect();
+    let whole_thread = v["wholeThread"].as_bool()?;
+    let oldest = posts.len() < take;
+    (!oldest || whole_thread).then_some((posts, oldest))
+}
+
+async fn newest_window(state: &AppState, thread: &Value, comments: bool) -> ApiResult<Window> {
+    let thread_id = thread["id"].as_i64().unwrap_or_default();
+    let socket = match (comments, thread["name"].as_str()) {
+        (false, Some(name)) => newest_from_socket(state, name, 50).await,
+        _ => None,
+    };
+    let (posts, counters, oldest) = match socket {
+        Some((posts, oldest)) => {
+            let counters = authors(state, &posts).await?;
+            (posts, counters, oldest)
+        }
+        None => recent_counts(state, thread_id, 50, None, comments).await?,
+    };
+    Ok(Window {
+        posts,
+        counters,
+        newest: true,
+        oldest: oldest.then_some(true),
+    })
+}
+
+async fn post_from_socket(state: &AppState, uuid: &str) -> Option<Value> {
+    let v = state
+        .socket_calls
+        .call("postInMemory", json!({ "uuid": uuid }), SOCKET_READ)
+        .await?;
+    v["post"].is_object().then(|| entity::POST.ordered(&v["post"]))
+}
+
 struct Window {
     posts: Vec<Value>,
     counters: Vec<Value>,
@@ -1831,7 +1877,8 @@ struct Window {
     oldest: Option<bool>,
 }
 
-async fn around(state: &AppState, thread_id: i64, context: Option<&str>, comments: bool) -> ApiResult<(Window, bool)> {
+async fn around(state: &AppState, thread: &Value, context: Option<&str>, comments: bool) -> ApiResult<(Window, bool)> {
+    let thread_id = thread["id"].as_i64().unwrap_or_default();
     let anchor = match context {
         Some(c) => db::rows(
             state,
@@ -1844,16 +1891,7 @@ async fn around(state: &AppState, thread_id: i64, context: Option<&str>, comment
         None => None,
     };
     let Some(anchor) = anchor else {
-        let (posts, counters, oldest) = recent_counts(state, thread_id, 50, None, comments).await?;
-        return Ok((
-            Window {
-                posts,
-                counters,
-                newest: true,
-                oldest: oldest.then_some(true),
-            },
-            false,
-        ));
+        return Ok((newest_window(state, thread, comments).await?, false));
     };
     let id = anchor["id"].as_i64().unwrap_or_default();
     let c3 = if comments {
@@ -1906,9 +1944,8 @@ async fn get_recent(State(state): State<AppState>, MaybeUser(user): MaybeUser, b
     let Some(thread) = find_thread(&state, &name, c.as_ref(), user.is_some()).await? else {
         return Err(bare(StatusCode::BAD_REQUEST));
     };
-    let tid = thread["id"].as_i64().unwrap_or_default();
     let comments = truthy(body.get("commentsOnly"));
-    let (w, _) = around(&state, tid, body.get("context").as_str(), comments).await?;
+    let (w, _) = around(&state, &thread, body.get("context").as_str(), comments).await?;
     let mut out = json!({ "recentCounts": w.posts, "counters": w.counters, "isNewest": w.newest, "recentSplits": [] });
     if let Some(o) = w.oldest {
         out["isOldest"] = json!(o);
@@ -1948,7 +1985,7 @@ async fn recent_on_load_full(
     let tid = thread["id"].as_i64().unwrap_or_default();
     let comments = q.str("commentsOnly") == Some("true");
     let context = q.str("context").filter(|s| !s.is_empty());
-    let (w, anchored) = around(&state, tid, context, comments).await?;
+    let (w, anchored) = around(&state, &thread, context, comments).await?;
     let with_author = |p: &Value, counters: &[Value]| counters.iter().find(|c| c["uuid"] == p["authorUUID"]).cloned();
     let last_post = if anchored {
         last_valid(&state, tid).await?
@@ -1988,14 +2025,20 @@ async fn recent_on_load_full(
 
 async fn count_by_uuid(State(state): State<AppState>, body: JsonBody) -> ApiResult<Reply> {
     let uuid = js_string(body.get("uuid"));
-    let Some(post) = db::one(
-        &state,
-        &entity::POST,
-        "SELECT * FROM post WHERE uuid = ? LIMIT 1",
-        &uuid,
-    )
-    .await?
-    else {
+    let in_memory = post_from_socket(&state, &uuid).await;
+    let stored = match in_memory {
+        Some(p) => Some(p),
+        None => {
+            db::one(
+                &state,
+                &entity::POST,
+                "SELECT * FROM post WHERE uuid = ? LIMIT 1",
+                &uuid,
+            )
+            .await?
+        }
+    };
+    let Some(post) = stored else {
         return Err(ApiError::Internal(anyhow::anyhow!("post not found")));
     };
     let thread = db::find_thread_by_uuid_value(&state, &post["thread"])

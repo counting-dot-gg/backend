@@ -6,6 +6,7 @@ mod app;
 mod auto;
 mod bingo;
 mod bingo_window;
+mod clickhouse;
 mod commands;
 mod config;
 mod connection;
@@ -33,6 +34,7 @@ mod regional_log;
 mod shuffle;
 mod splits;
 mod sync;
+mod tail;
 mod thread;
 mod wal;
 mod writer_lock;
@@ -70,6 +72,12 @@ async fn main() -> Result<()> {
     }
 
     writer_lock::acquire(&cfg.mysql).await?.keep();
+    if std::env::args().nth(1).as_deref() == Some("clickhouse-backfill") {
+        let Some(ch) = cfg.clickhouse.clone() else {
+            anyhow::bail!("clickhouse-backfill needs CLICKHOUSE_URL");
+        };
+        return clickhouse::backfill_command(ch, pool).await;
+    }
 
     let last_on_disk = wal::recover(&cfg.wal_dir)?;
     let checkpoint = persister::ensure_checkpoint_table(&pool).await?;
@@ -108,6 +116,26 @@ async fn main() -> Result<()> {
     let effects_cp = checkpoints.register("effects", effects_at.seq);
     let rank_cp = checkpoints.register("rank", rank_at.seq);
     let bingo_cp = checkpoints.register("bingo", bingo_at.seq);
+    let ch_stats = Arc::new(clickhouse::Stats::default());
+    let clickhouse_sink = cfg.clickhouse.clone().map(|ch| {
+        let start = CursorFile::new(&cfg.wal_dir, clickhouse::CURSOR)
+            .load()
+            .unwrap_or(Position {
+                seq: wal_seq,
+                post_id: max_id,
+            });
+        clickhouse::Sink {
+            cfg: ch,
+            dir: cfg.wal_dir.clone(),
+            committed: Arc::new(wal::Committed::new(0)),
+            persisted: persisted.clone(),
+            mysql: cfg.mysql.clone(),
+            checkpoints: checkpoints.clone(),
+            checkpoint: checkpoints.register(clickhouse::CURSOR, start.seq),
+            start,
+            stats: ch_stats.clone(),
+        }
+    });
 
     let threads = db::load_threads(&pool).await?;
     let metrics = Arc::new(metrics::Metrics::default());
@@ -232,6 +260,13 @@ async fn main() -> Result<()> {
     tokio::spawn(rank::run(app.clone(), persisted.clone(), rank_at, rank_cp));
     tokio::spawn(bingo::run(app.clone(), committed.clone(), bingo_at, bingo_cp));
     tokio::spawn(sync::run(app.clone(), ctx.clone()));
+    if let Some(sink) = clickhouse_sink {
+        clickhouse::Sink {
+            committed: committed.clone(),
+            ..sink
+        }
+        .spawn()?;
+    }
 
     {
         let app = app.clone();
@@ -271,10 +306,10 @@ async fn main() -> Result<()> {
 
     let origins: Vec<_> = cfg.cors_origins.iter().filter_map(|o| o.parse().ok()).collect();
     let metrics_route = {
-        let (app, pstats, checkpoints) = (app.clone(), pstats.clone(), checkpoints.clone());
+        let (app, pstats, checkpoints, ch) = (app.clone(), pstats.clone(), checkpoints.clone(), ch_stats.clone());
         move || {
-            let (app, pstats, checkpoints) = (app.clone(), pstats.clone(), checkpoints.clone());
-            async move { render_metrics(&app, &pstats, &checkpoints) }
+            let (app, pstats, checkpoints, ch) = (app.clone(), pstats.clone(), checkpoints.clone(), ch.clone());
+            async move { render_metrics(&app, &pstats, &checkpoints, &ch) }
         }
     };
     let health_route = {
@@ -480,7 +515,12 @@ fn health(app: &App, pstats: &persister::PersistStats, checkpoints: &Checkpoints
     (code, body.to_string())
 }
 
-fn render_metrics(app: &App, pstats: &persister::PersistStats, checkpoints: &Checkpoints) -> String {
+fn render_metrics(
+    app: &App,
+    pstats: &persister::PersistStats,
+    checkpoints: &Checkpoints,
+    ch: &clickhouse::Stats,
+) -> String {
     let Some(w) = app.wal.get() else { return String::new() };
     let committed = w.committed.get() as f64;
     let cp = pstats.checkpoint.load(Ordering::Relaxed) as f64;
@@ -533,6 +573,12 @@ fn render_metrics(app: &App, pstats: &persister::PersistStats, checkpoints: &Che
     s.sync.write(&mut out, "cgg_wal_sync_seconds", "batch write + sync");
     s.handoff
         .write(&mut out, "cgg_wal_handoff_seconds", "durable to broadcast start");
+    pstats.visible.write(
+        &mut out,
+        "cgg_persist_visible_seconds",
+        "post made to readable in MySQL",
+    );
+    ch.render(&mut out);
     out
 }
 

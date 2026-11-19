@@ -1,4 +1,5 @@
 mod bench;
+mod clickhouse;
 mod client;
 mod compare;
 mod dev;

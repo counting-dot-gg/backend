@@ -30,6 +30,19 @@ pub fn check_redis(url: &str) -> Result<()> {
     }
 }
 
+pub fn check_clickhouse(url: &str) -> Result<()> {
+    let rest = url
+        .strip_prefix("http://")
+        .or_else(|| url.strip_prefix("https://"))
+        .unwrap_or(url);
+    let authority = rest.split('/').next().unwrap_or(rest);
+    let host = authority.rsplit_once(':').map_or(authority, |(h, _)| h);
+    if !local_host(host) {
+        bail!("refusing ClickHouse host {host}: the harness only runs against a local ClickHouse");
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

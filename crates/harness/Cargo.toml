@@ -24,6 +24,7 @@ serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
 sqlx.workspace = true
+post_codec = { path = "../post_codec", features = ["mysql"] }
 tokio = { workspace = true, features = ["full"] }
 tokio-tungstenite = "0.24"
 tracing.workspace = true

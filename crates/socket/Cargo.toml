@@ -16,6 +16,7 @@ cgg-core = { path = "../core" }
 cgg-web = { path = "../web" }
 counting = { path = "../counting" }
 cgg-decide = { path = "../decide" }
+post_codec = { path = "../post_codec", features = ["mysql"] }
 stats = { path = "../stats" }
 progression = { package = "cgg-progression", path = "../progression" }
 tokio = { workspace = true, features = ["full"] }

@@ -1,0 +1,18 @@
+[package]
+name = "post_codec"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "Compact column encoding for stored posts, exact round trip"
+
+[dependencies]
+counting = { path = "../counting" }
+sqlx = { workspace = true, optional = true }
+
+[features]
+mysql = ["dep:sqlx"]
+
+[lints]
+workspace = true

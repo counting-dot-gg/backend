@@ -16,7 +16,10 @@ pub struct Target {
     pub mysql: cgg_core::MysqlConfig,
     pub redis_url: String,
     pub cookie_secret: String,
+    pub clickhouse_url: Option<String>,
 }
+
+pub const CLICKHOUSE_DATABASE: &str = "cgg_harness";
 
 impl Target {
     pub fn from_env() -> Result<Target> {
@@ -39,10 +42,15 @@ impl Target {
         guard::check_mysql(&mysql.host, &mysql.database)?;
         let redis_url = cgg_core::var("HARNESS_REDIS_URL").unwrap_or_else(|| "redis://127.0.0.1:6379/9".into());
         guard::check_redis(&redis_url)?;
+        let clickhouse_url = cgg_core::var("HARNESS_CLICKHOUSE_URL");
+        if let Some(url) = &clickhouse_url {
+            guard::check_clickhouse(url)?;
+        }
         Ok(Target {
             mysql,
             redis_url,
             cookie_secret,
+            clickhouse_url,
         })
     }
 
@@ -76,6 +84,17 @@ impl Target {
             .await
             .with_context(|| format!("connect to Redis at {}", self.redis_url))?;
         redis::cmd("FLUSHDB").query_async::<_, ()>(&mut r).await?;
+        if let Some(url) = &self.clickhouse_url {
+            reqwest::Client::builder()
+                .no_proxy()
+                .build()?
+                .post(url)
+                .body(format!("DROP DATABASE IF EXISTS {CLICKHOUSE_DATABASE} SYNC"))
+                .send()
+                .await
+                .with_context(|| format!("connect to ClickHouse at {url}"))?
+                .error_for_status()?;
+        }
         Ok(())
     }
 

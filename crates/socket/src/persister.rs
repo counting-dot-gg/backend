@@ -14,6 +14,7 @@ pub struct PersistStats {
     pub rows: AtomicU64,
     pub failures: AtomicU64,
     pub last_commit_us: AtomicU64,
+    pub visible: crate::metrics::Histogram,
 }
 
 pub async fn ensure_checkpoint_table(pool: &MySqlPool) -> Result<u64> {
@@ -323,6 +324,11 @@ impl Persister {
                     self.persisted.set(last);
                     let mut top: std::collections::HashMap<u32, i64> = std::collections::HashMap::new();
                     for (_, r) in batch {
+                        if let WalRecord::Post { post, .. } = r
+                            && let Some(d) = crate::clickhouse::visible_after(&post.timestamp)
+                        {
+                            self.stats.visible.record(d);
+                        }
                         if let WalRecord::Post { post, .. } = r
                             && let (true, Some(n)) = (post.is_valid_count, post.valid_count_number)
                         {

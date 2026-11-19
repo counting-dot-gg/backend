@@ -169,6 +169,10 @@ impl Socket {
         bail!("socket not ready after 60s; see {}", self.log_path().display())
     }
 
+    pub fn wal_dir(&self) -> PathBuf {
+        self.workdir.join("wal")
+    }
+
     pub fn log_path(&self) -> PathBuf {
         self.workdir.join("socket.log")
     }
@@ -216,7 +220,17 @@ fn spawn(
         .env("RATE_LIMITS", if rate_limits { "on" } else { "off" })
         .env("HOST_URL", crate::env::SITE_ORIGIN)
         .env("TRUST_PROXY_HOPS", "1")
-        .env("RUST_LOG", "warn")
+        .env(
+            "RUST_LOG",
+            std::env::var("HARNESS_SOCKET_LOG").unwrap_or_else(|_| "warn".into()),
+        )
+        .envs(target.clickhouse_url.iter().flat_map(|url| {
+            [
+                ("CLICKHOUSE_URL", url.as_str()),
+                ("CLICKHOUSE_DATABASE", crate::env::CLICKHOUSE_DATABASE),
+                ("CLICKHOUSE_FLUSH_MS", "100"),
+            ]
+        }))
         .envs(extra_env.iter().map(|(k, v)| (k, v)))
         .stdout(Stdio::from(log.try_clone()?))
         .stderr(Stdio::from(log))

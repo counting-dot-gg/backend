@@ -506,6 +506,7 @@ dependencies = [
  "fastrand",
  "futures-util",
  "hmac",
+ "post_codec",
  "redis",
  "reqwest",
  "serde",
@@ -552,6 +553,7 @@ dependencies = [
  "mimalloc",
  "parking_lot",
  "png",
+ "post_codec",
  "redis",
  "regex",
  "reqwest",
@@ -2065,6 +2067,14 @@ dependencies = [
  "cpufeatures 0.2.17",
  "opaque-debug",
  "universal-hash",
+]
+
+[[package]]
+name = "post_codec"
+version = "0.1.0"
+dependencies = [
+ "counting",
+ "sqlx",
 ]
 
 [[package]]
