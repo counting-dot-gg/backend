@@ -12,6 +12,7 @@ name = "cgg-api"
 path = "src/main.rs"
 
 [dependencies]
+mimalloc = { version = "0.1", default-features = false }
 cgg-core = { path = "../core" }
 cgg-web = { path = "../web" }
 counting = { path = "../counting" }
